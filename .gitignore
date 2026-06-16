@@ -25,3 +25,8 @@ Thumbs.db
 # Log files
 *.log
 logs/
+
+#evaluation outputs
+hyperscholar/eval/results/
+demo_small.jsonl
+hyperscholar/hyperscholar_runtime/

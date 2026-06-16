@@ -101,12 +101,15 @@ def load_config(path: str | Path | None = None) -> Config:
                            and k != "providers"})
     llm_cfg.providers = providers
 
+    _raw_wd = raw.get("working_dir", "./hyperscholar_runtime")
+    _abs_wd = str((Path(__file__).resolve().parent.parent / _raw_wd.lstrip("./")).resolve())
+
     cfg = Config(
         rag=RAGConfig(**raw.get("rag", {})),
         embedding=EmbeddingConfig(**raw.get("embedding", {})),
         llm=llm_cfg,
         store=StoreConfig(**raw.get("store", {})),
-        working_dir=raw.get("working_dir", "./hyperscholar_runtime"),
+        working_dir=_abs_wd,
     )
     # keep dims in sync: the vector store dimension must equal the embedder output
     cfg.store.vector_dim = cfg.embedding.dim
