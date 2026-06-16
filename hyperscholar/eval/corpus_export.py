@@ -113,6 +113,7 @@ async def export_hierarchical(corpus: str, namespace: str, results_dir: Path) ->
 
     backend = HierarchicalRAGBackend(
         llm_func=llm, embedder=embedder,
+        working_dir=cfg.working_dir,
         kv_cls=JsonKVStorage,
         vector_cls=NanoVectorDBStorage,
         pg_dsn=None, fail_markers=cfg.rag.fail_markers)

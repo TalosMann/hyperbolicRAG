@@ -94,6 +94,7 @@ class HierarchicalRAGBackend(RAGBackend):
     _name = "hierarchical"
 
     def __init__(self, *, llm_func, embedder, kv_cls, vector_cls,
+                 working_dir: str = ".",
                  pg_dsn: str | None = None,
                  chunk_size: int = 1200, chunk_overlap: int = 100,
                  cluster_threshold: float = 0.45, max_levels: int = 3,
@@ -101,6 +102,7 @@ class HierarchicalRAGBackend(RAGBackend):
                  fail_markers: list[str] | None = None):
         self._llm = llm_func
         self._embedder = embedder
+        self._working_dir = working_dir
         self._kv_cls = kv_cls
         self._vector_cls = vector_cls
         self._pg_dsn = pg_dsn
@@ -123,7 +125,7 @@ class HierarchicalRAGBackend(RAGBackend):
         if self._cosine_threshold is not None:
             addon["cosine_better_than_threshold"] = self._cosine_threshold
         return {"addon_params": addon, "embedding_batch_num": 8,
-                "working_dir": os.path.join("hierarchical_runtime", namespace)}
+                "working_dir": os.path.join(self._working_dir, "hierarchical", namespace)}
 
     def _stores(self, namespace: TenantNS):
         cfg = self._cfg(namespace)
@@ -140,6 +142,10 @@ class HierarchicalRAGBackend(RAGBackend):
 
     # ── RAGBackend contract ───────────────────────────────────────────────────
     async def index(self, namespace: TenantNS, documents: list[Document]) -> IndexResult:
+        # Ensure working directory exists — JsonKVStorage write_json requires it.
+        import pathlib
+        pathlib.Path(self._cfg(namespace)["working_dir"]).mkdir(parents=True, exist_ok=True)
+
         docs, chunks, cache, chunks_vdb, tree_vdb, tree_kv = self._stores(namespace)
 
         # 1–2: shared content (skip work already present — shared across backends)
@@ -192,6 +198,14 @@ class HierarchicalRAGBackend(RAGBackend):
                 await tree_kv.upsert(node_payload)
                 n_nodes += len(node_payload)
                 level_ids, level_texts = next_ids, next_texts
+
+        # Persist all stores to disk — JsonKVStorage / NanoVectorDBStorage only
+        # write on this callback. Without it the index lives in RAM and is lost
+        # when the process exits.
+        for store in (docs, chunks, cache, chunks_vdb, tree_vdb, tree_kv):
+            cb = getattr(store, "index_done_callback", None)
+            if cb is not None:
+                await cb()
 
         return IndexResult(namespace=namespace, documents=len(documents),
                            chunks=len(chunk_ids), backend=self.name,

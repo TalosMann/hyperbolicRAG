@@ -53,6 +53,7 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str) -> None
     if backend in ("hierarchical", "both"):
         backends.append(("hierarchical", HierarchicalRAGBackend(
             llm_func=llm, embedder=embedder,
+            working_dir=cfg.working_dir,
             kv_cls=JsonKVStorage,
             vector_cls=NanoVectorDBStorage,
             pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
