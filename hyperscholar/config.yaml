@@ -1,0 +1,44 @@
+# HyperScholar — Phase 1 configuration
+# Switch the active RAG backend with ONE line:
+rag:
+  backend: hyperrag            # hyperrag | hyperrag_light | hierarchical
+  top_k: 60
+  min_sources: 1
+
+embedding:
+  model: BAAI/bge-m3           # set to "hash" for offline tests
+  dim: 1024
+  device: auto                 # auto = cuda on Windows/Linux, mps on Apple Silicon, cpu fallback
+  batch_size: 8
+
+# ── LLM providers ─────────────────────────────────────────────────────────────
+# Priority: first provider whose API key env var is set wins.
+# If none are set, falls back to local (Ollama/LM Studio must be running).
+llm:
+  providers:
+    - name: deepseek
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY
+
+    - name: siliconflow
+      base_url: https://api.siliconflow.cn/v1
+      model: deepseek-ai/DeepSeek-V3
+      api_key_env: SILICONFLOW_API_KEY
+
+    - name: local_ollama
+      base_url: http://localhost:11434/v1
+      model: deepseek-r1:7b    # change to whatever model you have pulled
+      api_key_env: ""           # Ollama doesn't need a key
+
+    - name: local_lmstudio
+      base_url: http://localhost:1234/v1
+      model: local-model        # LM Studio uses whatever model is loaded
+      api_key_env: ""
+
+store:
+  # memory://  → in-process (dev/tests, no Postgres needed)
+  # postgresql://user:pass@localhost:5432/hyperscholar  → pgvector
+  dsn: ${HYPERSCHOLAR_DSN:memory://}
+
+working_dir: ./hyperscholar_runtime

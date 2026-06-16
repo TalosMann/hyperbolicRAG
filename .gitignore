@@ -1,0 +1,27 @@
+# Virtual environments
+venv/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+.envrc
+
+# Compressed archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# IDE / OS junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files
+*.log
+logs/

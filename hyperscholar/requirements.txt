@@ -1,0 +1,8 @@
+pyyaml
+numpy
+openai            # OpenAI-compatible client for DeepSeek / SiliconFlow
+sentence-transformers   # local bge-m3 (MPS)
+asyncpg           # PostgreSQL
+pgvector          # vector type helpers (optional; raw SQL also works)
+pytest
+pytest-asyncio
