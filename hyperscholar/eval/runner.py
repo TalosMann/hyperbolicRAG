@@ -1,7 +1,12 @@
 r"""eval/runner.py
 
 Runs every generated question through both backends, capturing answers and
-retrieval provenance. Uses file-backed storage to read from persisted indexes.
+retrieval provenance.
+
+Features:
+- Saves after every question (checkpoint) — safe to interrupt and resume
+- Resume: skips questions already in answers.json on restart
+- Uses file-backed storage to read from persisted indexes
 
 Usage
 -----
@@ -55,19 +60,47 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
     qdata = json.loads(q_path.read_text(encoding="utf-8"))
     questions = qdata["questions"]
 
-    out = {"corpus": corpus, "namespace": namespace, "results": []}
+    out_path = results_dir / corpus / "answers.json"
+
+    # Resume: load already-completed results if file exists
+    if out_path.exists():
+        existing = json.loads(out_path.read_text(encoding="utf-8"))
+        done_ids = {r["id"] for r in existing.get("results", [])}
+        out = existing
+        print(f"  resuming — {len(done_ids)} already answered, "
+              f"{len(questions) - len(done_ids)} remaining")
+    else:
+        done_ids = set()
+        out = {"corpus": corpus, "namespace": namespace, "results": []}
+
     for q in questions:
         qid, text = q["id"], q["question"]
+        if qid in done_ids:
+            continue
+
         print(f"  Q{qid}: {text[:70]}")
 
-        hyper_res = await hyperrag_query_with_provenance(
-            hyper, namespace, text, top_k=top_k)
+        try:
+            hyper_res = await hyperrag_query_with_provenance(
+                hyper, namespace, text, top_k=top_k)
+        except Exception as e:
+            print(f"    hyperrag ERROR: {e}")
+            hyper_res = {"answer": "", "ok": False,
+                         "provenance": {"entities": [], "hyperedges": [],
+                                        "text_units": [], "error": str(e)}}
+
+        try:
+            hier_res = await hierarchical_query_with_provenance(
+                hier, namespace, text, top_k=top_k)
+        except Exception as e:
+            print(f"    hierarchical ERROR: {e}")
+            hier_res = {"answer": "", "ok": False,
+                        "provenance": {"nodes_accessed": [], "chunks_accessed": [],
+                                       "levels_accessed": [], "error": str(e)}}
+
         print(f"    hyperrag     ok={hyper_res['ok']} "
               f"ents={hyper_res['provenance'].get('counts', {}).get('entities', 0)} "
               f"edges={hyper_res['provenance'].get('counts', {}).get('hyperedges', 0)}")
-
-        hier_res = await hierarchical_query_with_provenance(
-            hier, namespace, text, top_k=top_k)
         print(f"    hierarchical ok={hier_res['ok']} "
               f"nodes={hier_res['provenance'].get('counts', {}).get('tree_nodes', 0)} "
               f"levels={hier_res['provenance'].get('levels_accessed', [])}")
@@ -80,10 +113,12 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
             "hierarchical": hier_res,
         })
 
-    out_path = results_dir / corpus / "answers.json"
-    out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
-                        encoding="utf-8")
-    print(f"\n✓ {len(out['results'])} answered → {out_path}")
+        # Checkpoint — write after every question
+        out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+
+    total = len(out["results"])
+    print(f"\n✓ {total} answered → {out_path}")
     return out_path
 
 
