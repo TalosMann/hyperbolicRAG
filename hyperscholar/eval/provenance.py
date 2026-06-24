@@ -174,7 +174,7 @@ async def hierarchical_query_with_provenance(backend, namespace: str, text: str,
         }
 
     passages.sort(key=lambda x: -x[0])
-    context = "\n\n".join(p for _, p in passages[:k])[:8000]
+    context = "\n\n".join(p for _, p in passages[:k])[:24000]
 
     from .hierarchical_prompts import ANSWER_PROMPT, FAIL
     answer = await backend._llm(

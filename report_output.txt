@@ -1,0 +1,147 @@
+HyperRAG vs. HierarchicalRAG
+An evaluation report for the HyperScholar project
+Corpus: neurology (Adams & Victor's Principles of Neurology, 11th ed.) — 2,000 of 12,370 chunks indexed (partial corpus). Judge & extraction model: deepseek-chat. Embedder: BAAI/bge-m3 (GPU).
+Executive Summary
+This report compares two HyperScholar RAG backends — HyperRAG (hypergraph entity/relationship retrieval) and HierarchicalRAG (RAPTOR-style collapsed-tree summarization) — using the iMoonLab Hyper-RAG paper's LLM-as-judge protocol, extended with additional question styles and an independent ground-truth grounding check.
+Two findings point in opposite directions, and both matter:
+On the LLM-as-judge protocol (the paper's own methodology), HyperRAG wins decisively — 42 of 45 scored questions, across every question style we tested, including styles HierarchicalRAG's architecture is specifically designed for (cross-corpus synthesis, broad overview).
+On an independent ground-truth check — verifying each answer's key claim directly against its own cited source passage — HyperRAG contradicted its own source on 8 of 20 fact questions (40%). HierarchicalRAG contradicted its source on 0 of 20.
+The LLM judge is measuring how an answer reads — comprehensiveness, fluency, structure — not whether it is true. A confident, well-organized, factually wrong answer scores well on that rubric unless the error is severe enough to break coherence. This report walks through specific cases where that gap is visible directly: HyperRAG naming the wrong thalamic nuclei, inventing diagnoses not in its source, and conflating an unrelated patient case from elsewhere in the corpus into its answer — while still scoring respectably on the judge's rubric.
+We also document three implementation defaults — retrieval depth, answer-prompt strictness, and context-window truncation — that we found were silently biasing the comparison before we identified and corrected them. We treat this as a methodological finding in its own right: results from this evaluation protocol are sensitive to engineering choices that have nothing to do with the underlying retrieval architecture, and any comparison should treat them as confounds to audit, not defaults to inherit.
+Background
+HyperScholar's core architectural guarantee is that all study content is generated from RAG-grounded answers rather than an LLM's parametric memory — an explicit anti-hallucination commitment. HyperRAG and HierarchicalRAG are two candidate retrieval backends for that pipeline, with fundamentally different retrieval strategies:
+HyperRAG extracts entities and relationships from chunks via an LLM during indexing, builds a hypergraph connecting them, and answers by retrieving and synthesizing across many entities/relationships/text units (top_k = 60).
+HierarchicalRAG clusters chunks by embedding similarity, LLM-summarizes each cluster into a tree, and answers via collapsed-tree retrieval across all levels of that tree.
+The iMoonLab Hyper-RAG paper evaluates RAG architectures with an LLM-as-judge protocol: for each of 50 chunk-anchored questions, a judge model scores two answers — blind, position-randomized — on five dimensions (comprehensiveness, diversity, empowerment, logical coherence, readability). We replicated this protocol, then extended it once early results raised concerns about what it was actually measuring.
+Methodology
+Corpus and indexing
+2,000 of 12,370 chunks from the neurology corpus were indexed into both backends (a partial-corpus test; see Limitations). HyperRAG's hypergraph reached 21,383 entities and 30,391 hyperedges. HierarchicalRAG's summary tree reached 308 nodes across 4 levels.
+Question styles
+The paper's own protocol generates only chunk-anchored fact questions. We found this structurally favors entity/relationship retrieval over tree-based synthesis (see Methodological Critique), so we added four more styles:
+Fact (n=20) — “what does this specific passage say”, anchored to one random chunk. Paper's original method.
+Relational (n=10) — “how do X and Y relate”, sampled from a real hyperedge spanning ≥ 2 entities.
+Synthesis (n=10) — “how is topic X treated across the whole corpus”, sampled from a high-degree (frequently recurring) entity.
+Overview (n=5) — fixed corpus-level prompts, not anchored to any single chunk or topic.
+Negative (n=5) — asks for a specific detail that sounds plausible but is intentionally absent from its source passage. Scored by refusal rate, not the 5-metric rubric — see below.
+LLM-as-judge scoring
+For fact/relational/synthesis/overview questions: both answers are shown to deepseek-chat blind (no backend labels), with left/right position randomized per question to cancel ordering bias. The judge scores each 1–10 on the five metrics; the mean of the two means determines a winner or tie.
+Refusal check (negative-style questions)
+For negative-style questions, we check whether each backend's answer matched its own fail-marker (i.e., explicitly declined) rather than asking the judge to compare quality. Caveat: a non-refusal here is not proof of hallucination — it only means the canned fail-marker was not triggered. We manually reviewed the underlying answers before treating this as informative (see Results).
+Ground-truth grounding check
+For fact-style questions only — the one style with a single, narrowly verifiable source chunk — we ran a second, independent check: pull the full source chunk (not the truncated excerpt used for question generation) and ask deepseek-chat to verdict each answer's key claim as SUPPORTED, CONTRADICTED, or UNVERIFIABLE against that passage alone, with instructions to ignore outside knowledge. This is the only step in our methodology that checks an answer against ground truth rather than against the other backend's answer.
+Confounds found and corrected
+Initial results showed HierarchicalRAG losing essentially every question, including styles it is specifically designed for. Investigating why surfaced three implementation defaults that were biasing the comparison independent of architecture:
+Retrieval depth: HierarchicalRAG's eval query wrapper capped retrieval at 12 passages regardless of the requested top_k=60. Raised to 40.
+Answer-prompt strictness: HierarchicalRAG's answer prompt instructed the model to use “ONLY” the context and refuse if the answer was not verbatim present — a standard appropriate for narrow QA, but actively punishing on synthesis questions where no single passage ever literally states a cross-corpus synthesis. Relaxed to permit synthesis across passages, matching HyperRAG's own upstream prompt's tone (“summarizing all information… incorporating any relevant general knowledge”).
+Context-window truncation: assembled context was being truncated to 8,000 characters regardless of how many passages were retrieved — small relative to deepseek-chat's actual context window. Raised to 24,000.
+Each fix was applied in isolation and re-tested before moving to the next, so their individual effects could be observed. Results below reflect the corrected configuration. We flag this prominently because it is itself a finding: this evaluation protocol, as commonly implemented, is fragile to engineering defaults unrelated to the architecture under test.
+Results
+Overall judge scores
+Across all 45 non-negative questions scored, HyperRAG outperforms HierarchicalRAG on every metric, including ones HierarchicalRAG's architecture should favor.
+Figure 1. Overall mean judge scores, all non-negative question styles combined (n=45).
+Figure 2. Score profile across the five judge metrics. HyperRAG's profile is uniformly larger — there is no metric where HierarchicalRAG's shape extends further.
+Scores by question style
+We expected HierarchicalRAG to close the gap, or win outright, on synthesis and overview questions — the styles its collapsed-tree retrieval is built for. It does not, even after the three confound fixes above.
+Figure 3. Mean judge score by question style.
+Figure 4. Win counts by question style. HierarchicalRAG's only wins/ties are in fact retrieval and synthesis.
+Per-question variance
+Aggregates hide individual cases. The same handful of questions reproducibly favor HierarchicalRAG across reruns — not random noise, but specific cases where its retrieval pipeline genuinely worked well (see Case Studies).
+Figure 5. Per-question score gap (HyperRAG mean − HierarchicalRAG mean), by style. Points below the dashed line are HierarchicalRAG wins.
+Ground-truth grounding check
+This is the result that complicates the picture above. Checked independently against each answer's own cited source passage, ignoring style and fluency entirely:
+Figure 6. Ground-truth grounding check, fact-style questions only (n=20 each). “Contradicted” means the answer's key claim conflicts with its own cited source.
+HyperRAG's answers conflicted with their own source 40% of the time. HierarchicalRAG's conflicted 0% of the time. This inverts the headline finding above: the backend that wins the judge comparison decisively is also the backend that most often gets its own cited facts wrong.
+Hallucination-resistance (refusal on negative-style questions)
+Each negative-style question asks for a specific detail deliberately absent from its source. Correct behavior is to decline rather than invent an answer.
+Figure 7. Share of negative-style questions correctly declined, by backend (n=5).
+HyperRAG declined 0 of 5 — it answered confidently every time, even when the specific requested detail was not in the corpus. We manually reviewed these five answers; none were a plain refusal, consistent with the pattern documented in the case studies below.
+Case Studies
+Eight of twenty fact-style answers from HyperRAG were marked CONTRADICTED by the grounding check. They fall into three identifiable patterns, illustrated below with a representative case for each, plus the clearest case where HierarchicalRAG's design worked as intended.
+Pattern 1 of 3 — Injecting plausible facts not in the source
+The most common pattern (Q1, Q13, Q15, Q19 of the eight). HyperRAG adds medically real, textbook-correct details — just not ones this particular passage states. This traces directly to HyperRAG's own upstream answer prompt, which explicitly instructs the model to incorporate “any relevant general knowledge.”
+Case: Q1 — fact
+Question
+What serious intracranial conditions, other than subarachnoid hemorrhage and arterial dissection, should be considered in cases of exertional headaches?
+Source passage (as indexed)
+Exertional headaches, for example those that are associated with sexual activity or weight lifting, are usually benign but they are sometimes related to pheochromocytoma, arteriovenous malformation, or other intracranial lesions, in addition to the aforementioned subarachnoid hemorrhage from ruptured aneurysm and arterial dissection. The same usually benign nature applies to headaches induced by stooping and at worst, are accounted for by sinus infection but there are exceptions and subdural hematoma is a known cause.
+Answers side by side
+HyperRAG
+HierarchicalRAG
+...a range of serious intracranial conditions beyond subarachnoid hemorrhage and arterial dissection must be considered... “Lesions of the Posterior Fossa and Craniocervical Junction” — A significant category to consider includes structural abnormalities of the posterior fossa and the foramen magnum...
+(HierarchicalRAG's answer to this question was marked SUPPORTED by the grounding check; full text not reproduced here — see Q19 below for a representative HierarchicalRAG answer on this corpus.)
+Fact-check verdict: CONTRADICTED. The source passage mentions only pheochromocytoma, arteriovenous malformation, other intracranial lesions, and subdural hematoma — not Chiari malformation, posterior fossa tumors, or brain tumors, all of which HyperRAG's answer introduces.
+Pattern 2 of 3 — Reversing a specific relational fact
+Q6 and Q16. The original sentence's precise comparative structure (“X, unlike Y, has property Z”) appears to get lost or inverted when decomposed into separate entity/relationship records during indexing, then re-synthesized without the literal sentence in front of the model.
+Case: Q6 — fact
+Question
+What are the two thalamic nuclei that serve as a critical relay point for motor signals from both the basal ganglia and the cerebellum to the cerebral cortex?
+Source passage (as indexed)
+A general principle that has withstood the test of time is the central role of the ventrolateral and ventroanterior nuclei of the thalamus. Together, these nuclei form a nexus, not only from the basal ganglia but also from the cerebellum, to the motor and premotor cortex. Thus, both basal ganglionic and cerebellar influences are brought to bear, via thalamocortical fibers, on the corticospinal system.
+Answers side by side
+HyperRAG
+HierarchicalRAG
+...the thalamic nuclei that serve as the critical relay point... are the anterior thalamic nuclei. The relationships table explicitly describes the ANTERIOR THALAMIC NUCLEI as the site where [a string of garbled, non-rendering characters — mojibake, evidence of a character-encoding bug in the stored entity description] (signals from the basal ganglia and cerebellum converge and integrate)...
+Based on the context, the two thalamic nuclei that serve as a critical relay point for motor signals from both the basal ganglia and the cerebellum to the cerebral cortex are the ventrolateral and ventroanterior nuclei of the thalamus.
+Fact-check verdict: CONTRADICTED. The source explicitly names the ventrolateral and ventroanterior nuclei. HyperRAG's answer names a different, incorrect structure — and its entity-table citation contains visibly corrupted text, a separate data-integrity issue worth fixing independent of this finding.
+This case is doubly notable: the LLM judge, scoring blind and without knowing which answer was correct, independently rated HierarchicalRAG higher here too (6.0 vs 4.2 mean) — the incoherence introduced by the wrong fact and corrupted citation was severe enough to be visible even on a stylistic rubric.
+Pattern 3 of 3 — Conflating an unrelated case from elsewhere in the corpus
+Q18. Because HyperRAG retrieves from up to 60 entities across the entire corpus, it can pull in a different, only superficially similar case and attribute its details to the question at hand — a failure mode specific to multi-entity retrieval that single-chunk retrieval cannot make.
+Case: Q18 — fact
+Question
+What can be inferred about a mute and resistive patient initially judged as psychotic, based on neurological examination?
+Source passage (as indexed)
+By the manner in which the patient expresses ideas and responds to spoken or written requests, it is possible to determine whether there are hallucinations or delusions... On occasion, mute and resistive patients judged to be psychotic prove to have some widespread cerebral disease.
+Answers side by side
+HyperRAG
+HierarchicalRAG
+...a complex diagnostic challenge that bridges neurology and psychiatry... The patient's initial presentation as “psychotic-catatonic” is a key detail. The data explicitly defines a psychotic-catatonic patient (id: 24) as one suffering...
+(HierarchicalRAG's answer to this question was marked SUPPORTED by the grounding check; full text not reproduced here — see Q19 below for a representative HierarchicalRAG answer on this corpus.)
+Fact-check verdict: CONTRADICTED. The source passage says only that such patients sometimes prove to have widespread cerebral disease — it does not mention a catatonic state, early closure, or rigidity. The named entity “psychotic-catatonic patient (id: 24)” appears to be pulled in from elsewhere in the corpus.
+Where HierarchicalRAG was clearly stronger
+Q19 is the strongest case in the dataset: the LLM judge (scoring for style, blind to ground truth) and the independent grounding check (scoring for accuracy, blind to style) agree on the same answer for an unrelated reason each — convergent evidence from two different methods.
+Case: Q19 — fact
+Question
+What parts of a neurologic examination are recommended to assess the lower limbs?
+Source passage (as indexed)
+Inspection of the legs while the feet, toes, knees, and hips are actively flexed and extended; elicitation of the patellar, Achilles, and plantar reflexes; testing of vibration and position sense in the fingers and toes; and assessment of coordination by having the patient alternately touch his nose and the examiner's finger and run his heel up and down the front of the opposite leg, and observation of walking complete the essential parts of the neurologic examination.
+Answers side by side
+HyperRAG
+HierarchicalRAG
+...the neurologic examination of the lower limbs... is recommended to include the following components. “Initial Inspection and Observation” — The examination begins with an observational inspection of the legs, focusing on the condition of the feet and toes. This initial step can reveal signs of atrophy, abnormal postures...
+Inspection of the legs while the feet, toes, knees, and hips are actively flexed and extended; elicitation of the patellar, Achilles, and plantar reflexes; testing of vibration and position sense in the fingers and toes; and assessment of coordination by having the patient alternately touch his nose and the examiner's finger and run his heel up and down the front of the opposite leg, and observation of walking complete the essential parts of the neurologic examination.
+Fact-check verdict: CONTRADICTED (HyperRAG) / SUPPORTED (HierarchicalRAG). HierarchicalRAG's answer is a near-verbatim quotation of the correct passage. The judge, independently and without seeing the source, also scored HierarchicalRAG higher (7.8 vs 6.2 mean) — generic, padded phrasing scored worse even on style grounds.
+And the clearest synthesis-question success: when HierarchicalRAG's retrieval actually traverses the full tree depth, it produces a genuinely competitive, more clinically specific answer.
+Case: Q36 — synthesis
+Question
+Based on the entire corpus, how is MRI technology categorized, discussed, and applied across different medical contexts, and what are the key principles, variations, and limitations associated with its use?
+Source passage (as indexed)
+(Synthesis question — not anchored to a single chunk; both backends draw on multiple passages across the corpus.)
+Answers side by side
+HyperRAG
+HierarchicalRAG
+MRI technology is categorized as a highly advanced, non-invasive medical imaging modality that utilizes strong magnetic fields and radiofrequency pulses to produce detailed images of the human body, with a particular emphasis on soft tissues... classified as a diagnostic tool and a key component of imaging techniques and neuroimaging.
+MRI technology is categorized as a technique that uses nuclear magnetic resonance from hydrogen atoms, aligning them in a magnetic field and emitting signals upon radiofrequency pulse cessation, reconstructed into images via pulse sequences and computer analysis. It is discussed and applied as the preferred procedure for visualization of many neurologic lesions, providing high contrast between white and gray matter, superior visualization of posterior fossa and skull base lesions, detection of blood breakdown products, and clear spinal imaging.
+Judge result: TIE (7.6 vs 7.6 mean). HyperRAG scored higher on comprehensiveness/diversity; HierarchicalRAG scored higher on readability/empowerment. Notably, this was the one synthesis question where HierarchicalRAG's retrieval accessed all 4 levels of its summary tree — the architecture working as designed, blending broad framing with specific clinical detail.
+Critique of the iMoonLab Evaluation Methodology
+The protocol we extended is the one the Hyper-RAG paper itself uses. Running it carefully surfaced limitations worth naming directly, since they would affect any comparison using this approach, not just ours.
+The judge measures style, not truth
+This is the central finding of this report. An LLM judge comparing two answers side by side has no access to ground truth — it can only assess coherence, structure, and apparent thoroughness. Our results show this gap concretely: a 40% rate of factual contradiction against HyperRAG's own cited source coexisted with a 93% (42/45) win rate on the judge's rubric. Any RAG evaluation that reports only judge-based scores, without an independent grounding check, risks rewarding confident fabrication over honest, narrower correctness.
+Chunk-anchored fact questions structurally favor entity/relation retrieval
+The paper's own question-generation method — sample a chunk, ask what it says — is close to ideal for HyperRAG's retrieval style and close to the hardest case for collapsed-tree retrieval, which is built for cross-chunk synthesis, not narrow lookup. Without deliberately adding relational, synthesis, overview, and negative question styles (as we did), an evaluation using only the paper's original method cannot speak to whether a tree-based architecture is competitive at the task it is actually designed for.
+The protocol is sensitive to implementation defaults that aren't part of the architecture
+We found three: retrieval depth capped well below the requested top_k, an answer prompt strict enough to manufacture refusals on exactly the synthesis questions a tree-based method should excel at, and a context-truncation length tight enough to silently drop retrieved passages before they reached the model. None of these are properties of “collapsed-tree retrieval” as a concept — they are defaults in this particular implementation, and each one, left unexamined, would have been (and initially was) misread as an architectural weakness.
+Single-judge, no inter-rater check
+All scoring in this report used one judge model (deepseek-chat). LLM judges have known stylistic preferences — for length, headers, hedging language — that may not track quality or correctness. The paper's protocol, and ours, has no mechanism to detect or correct for this without a second judge model or human calibration sample.
+Partial-corpus testing likely understates tree-based methods
+Only 2,000 of 12,370 chunks were indexed. HierarchicalRAG's tree reached just 4 levels and 308 nodes — its design's benefits (broad, multi-level thematic synthesis) plausibly require more scale to fully materialize than this test allowed.
+Directions for Future Evaluation
+Pair every LLM-judge comparison with an automated grounding check against the cited source, as done here. For systems with an anti-hallucination claim, treat “contradiction rate against own source” as a primary reported metric, not an afterthought.
+Use a multi-style question suite (fact, relational, synthesis, overview, negative) as standard for any RAG architecture comparison — chunk-anchored fact questions alone cannot characterize methods built for synthesis.
+Audit and explicitly report retrieval-depth, prompt-wording, and context-window parameters as part of the methodology — they are confounds, not implementation detail, and can flip results independent of architecture.
+Test across multiple corpus scales (e.g., 10%, 50%, 100% indexed) so scale-dependent methods like tree summarization aren't judged at a scale where their design hasn't engaged.
+Use two or more judge models and report inter-judge agreement, or periodically calibrate against a small human-annotated sample, to bound single-model stylistic bias.
+Track latency and cost per query as first-class, reported metrics alongside quality — HierarchicalRAG's far cheaper indexing (fewer LLM calls per chunk) is a real tradeoff invisible in quality-only comparisons.
+For any production deployment with grounding guarantees, consider a runtime grounding-verification pass (the same mechanism as our fact-check script) rather than relying on retrieval architecture alone to prevent fabrication.
+Conclusion
+HyperRAG produces more comprehensive, fluent, well-structured answers and wins the LLM-judge comparison decisively across every question style tested. On an independent ground-truth check, it also contradicted its own cited source on 40% of fact questions — naming a wrong anatomical structure, inventing diagnoses absent from its source, and in one case attributing an unrelated patient case to the wrong context. HierarchicalRAG is far more conservative and source-faithful (0% contradicted) but less comprehensive, and shows genuine synthesis capability specifically in the case where its retrieval pipeline traversed the full depth of its summary tree.
+For a platform whose architectural promise is anti-hallucination grounding, this is the result that matters most: the backend that looks better on a standard quality rubric is also the one more often wrong about its own source material. We would recommend either pairing HyperRAG's retrieval with an explicit grounding-verification step before finalizing an answer, or treating this contradiction rate as a blocking concern before relying on its entity-abstraction layer for student-facing factual claims.

@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)(?::([^}]*))?\}")
 
@@ -79,11 +81,23 @@ class StoreConfig:
 
 
 @dataclass
+class HyperRAGConfig:
+    # Bounds asyncio.gather concurrency during entity extraction. Set low for
+    # rate-limited free-tier providers (Gemini: 15 RPM → max_async: 3 is safe).
+    # Maps to HyperRAG's `llm_model_max_async` constructor kwarg.
+    max_async: int = 4
+    # Fewer LLM "gleaning" passes per chunk during entity extraction — reduces
+    # total LLM calls at some cost to extraction thoroughness.
+    entity_extract_max_gleaning: int = 1
+
+
+@dataclass
 class Config:
     rag: RAGConfig = field(default_factory=RAGConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
+    hyperrag: HyperRAGConfig = field(default_factory=HyperRAGConfig)
     working_dir: str = "./hyperscholar_runtime"
 
 
@@ -109,6 +123,7 @@ def load_config(path: str | Path | None = None) -> Config:
         embedding=EmbeddingConfig(**raw.get("embedding", {})),
         llm=llm_cfg,
         store=StoreConfig(**raw.get("store", {})),
+        hyperrag=HyperRAGConfig(**raw.get("hyperrag", {})),
         working_dir=_abs_wd,
     )
     # keep dims in sync: the vector store dimension must equal the embedder output

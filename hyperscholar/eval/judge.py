@@ -1,10 +1,19 @@
 r"""eval/judge.py
 
-LLM-as-judge on the five iMoonLab paper metrics, blind and position-randomized.
+LLM-as-judge on the five iMoonLab paper metrics, blind and position-randomized
+— for fact / relational / synthesis / overview style questions.
+
+NEGATIVE-style questions are scored differently: no LLM comparison, just a
+refusal check against each backend's own fail_markers. A "refused" answer is
+the CORRECT behavior here (the asked-for detail is intentionally absent from
+the source). A non-refusal is NOT proof of hallucination — it only means the
+canned fail-marker wasn't triggered; the answer could still be hedged,
+partially correct, or genuinely fabricated. Manually spot-check non-refused
+negative answers if you need a true hallucination rate.
 
 Features:
 - Saves after every question (checkpoint) — safe to interrupt and resume
-- Resume: skips questions already scored in eval_results.json on restart
+- Resume: skips questions already scored/checked in eval_results.json
 - Gracefully skips unparseable judge responses rather than crashing
 
 Usage
@@ -73,6 +82,7 @@ def _mean(scores: dict) -> float:
 
 
 def _compute_aggregate(judged: list) -> dict:
+    """Aggregate over scored (non-negative-style) questions only."""
     agg = {b: {m: 0.0 for m in METRICS} for b in ("hyperrag", "hierarchical")}
     wins = {"hyperrag": 0, "hierarchical": 0, "tie": 0}
     n_scored = 0
@@ -96,6 +106,21 @@ def _compute_aggregate(judged: list) -> dict:
     return aggregate
 
 
+def _compute_negative_summary(judged: list) -> dict | None:
+    items = [j for j in judged if j.get("style") == "negative"
+             and j.get("negative_check") is not None]
+    if not items:
+        return None
+    out = {"n": len(items), "hyperrag_refused": 0, "hierarchical_refused": 0}
+    for j in items:
+        nc = j["negative_check"]
+        if nc.get("hyperrag_refused"):
+            out["hyperrag_refused"] += 1
+        if nc.get("hierarchical_refused"):
+            out["hierarchical_refused"] += 1
+    return out
+
+
 async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
     from hyperscholar.core.config import load_config
     from hyperscholar.core.llm import build_llm_func
@@ -110,20 +135,19 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
 
     out_path = results_dir / corpus / "eval_results.json"
 
-    # Resume: load already-scored results
     if out_path.exists():
         existing = json.loads(out_path.read_text(encoding="utf-8"))
         judged = existing.get("questions", [])
-        done_ids = {item["id"] for item in judged if item.get("scores") is not None}
-        print(f"  resuming — {len(done_ids)} already scored, "
+        done_ids = {item["id"] for item in judged
+                   if item.get("scores") is not None
+                   or item.get("negative_check") is not None}
+        print(f"  resuming — {len(done_ids)} already processed, "
               f"{len(data['results']) - len(done_ids)} remaining")
     else:
         judged = []
         done_ids = set()
 
-    # Index existing judged items by id for merging
     judged_by_id = {item["id"]: item for item in judged}
-
     rng = random.Random(seed)
 
     for item in data["results"]:
@@ -131,6 +155,22 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
         if qid in done_ids:
             continue
 
+        style = item.get("style", "fact")
+
+        # ── negative style: refusal check, no LLM comparison ─────────────────
+        if style == "negative":
+            nc = {
+                "hyperrag_refused": not item["hyperrag"]["ok"],
+                "hierarchical_refused": not item["hierarchical"]["ok"],
+            }
+            print(f"  Q{qid} [negative]: hyperrag_refused={nc['hyperrag_refused']} "
+                  f"hierarchical_refused={nc['hierarchical_refused']}")
+            judged_by_id[qid] = {**item, "scores": None, "negative_check": nc}
+            judged = list(judged_by_id.values())
+            _save(out_path, corpus, data, judged)
+            continue
+
+        # ── all other styles: blind, position-randomized LLM judge ──────────
         hyper_ans = item["hyperrag"]["answer"]
         hier_ans = item["hierarchical"]["answer"]
 
@@ -144,14 +184,14 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
                 question=item["question"], answer_a=a_ans, answer_b=b_ans))
             parsed = _parse_scores(reply)
         except Exception as e:
-            print(f"  Q{qid}: judge error ({e}), skipping")
+            print(f"  Q{qid} [{style}]: judge error ({e}), skipping")
             judged_by_id[qid] = {**item, "scores": None}
             judged = list(judged_by_id.values())
             _save(out_path, corpus, data, judged)
             continue
 
         if parsed is None:
-            print(f"  Q{qid}: judge parse failed, skipping")
+            print(f"  Q{qid} [{style}]: judge parse failed, skipping")
             judged_by_id[qid] = {**item, "scores": None}
         else:
             scores = {a_backend: parsed["A"], b_backend: parsed["B"]}
@@ -159,7 +199,8 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
             hier_mean = _mean(scores["hierarchical"])
             winner = ("hyperrag" if hyper_mean > hier_mean
                       else "hierarchical" if hier_mean > hyper_mean else "tie")
-            print(f"  Q{qid}: hyperrag={hyper_mean} hierarchical={hier_mean} → {winner}")
+            print(f"  Q{qid} [{style}]: hyperrag={hyper_mean} "
+                  f"hierarchical={hier_mean} → {winner}")
             judged_by_id[qid] = {
                 **item,
                 "scores": {
@@ -170,18 +211,21 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
             }
 
         judged = list(judged_by_id.values())
-        # Checkpoint — write after every question
         _save(out_path, corpus, data, judged)
 
     aggregate = _compute_aggregate(judged)
-    _save(out_path, corpus, data, judged, aggregate)
+    negative_summary = _compute_negative_summary(judged)
+    _save(out_path, corpus, data, judged, aggregate, negative_summary)
     print(f"\n✓ scored {aggregate['n_scored']} → {out_path}")
     print(f"  wins: {aggregate['wins']}")
+    if negative_summary:
+        print(f"  negative checks: {negative_summary}")
     return out_path
 
 
-def _save(out_path: Path, corpus: str, data: dict,
-          judged: list, aggregate: dict | None = None) -> None:
+def _save(out_path: Path, corpus: str, data: dict, judged: list,
+          aggregate: dict | None = None,
+          negative_summary: dict | None = None) -> None:
     out = {
         "corpus": corpus,
         "namespace": data.get("namespace", corpus),
@@ -189,6 +233,8 @@ def _save(out_path: Path, corpus: str, data: dict,
     }
     if aggregate:
         out["aggregate"] = aggregate
+    if negative_summary:
+        out["negative_summary"] = negative_summary
     out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False),
                         encoding="utf-8")
 

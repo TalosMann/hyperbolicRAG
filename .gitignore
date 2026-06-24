@@ -30,3 +30,5 @@ logs/
 hyperscholar/eval/results/
 demo_small.jsonl
 hyperscholar/hyperscholar_runtime/
+HyperRAG_vs_HierarchicalRAG_Evaluation_Report.docx
+backup/

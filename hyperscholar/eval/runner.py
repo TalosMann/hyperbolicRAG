@@ -105,10 +105,18 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
               f"nodes={hier_res['provenance'].get('counts', {}).get('tree_nodes', 0)} "
               f"levels={hier_res['provenance'].get('levels_accessed', [])}")
 
+        # Carry through every source_* field generically (source_chunk_id,
+        # source_hyperedge_id, source_entities, source_topic, source_degree,
+        # etc.) so downstream tools like fact_check.py have whatever
+        # ground-truth anchor this question's style provides — without
+        # hardcoding field names here that would silently drop new ones.
+        source_fields = {k: v for k, v in q.items() if k.startswith("source_")}
+
         out["results"].append({
             "id": qid,
+            "style": q.get("style", "fact"),
             "question": text,
-            "source_chunk_id": q["source_chunk_id"],
+            **source_fields,
             "hyperrag": hyper_res,
             "hierarchical": hier_res,
         })

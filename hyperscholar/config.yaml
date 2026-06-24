@@ -11,15 +11,26 @@ embedding:
   device: auto                 # auto = cuda on Windows/Linux, mps on Apple Silicon, cpu fallback
   batch_size: 8
 
+hyperrag:
+  max_async: 8                      # Gemini free tier: 15 RPM, stay conservative
+  entity_extract_max_gleaning: 1    # fewer LLM calls per chunk
 # ── LLM providers ─────────────────────────────────────────────────────────────
 # Priority: first provider whose API key env var is set wins.
 # If none are set, falls back to local (Ollama/LM Studio must be running).
 llm:
   providers:
+
     - name: deepseek
       base_url: https://api.deepseek.com/v1
       model: deepseek-chat
       api_key_env: DEEPSEEK_API_KEY
+
+    - name: gemini
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+      model: gemini-2.0-flash
+      api_key_env: GEMINI_API_KEY
+
+
 
     - name: siliconflow
       base_url: https://api.siliconflow.cn/v1

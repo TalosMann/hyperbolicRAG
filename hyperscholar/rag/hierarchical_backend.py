@@ -36,7 +36,7 @@ PASSAGES:
 {passages}
 """
 
-ANSWER_PROMPT = """Answer the question using ONLY the context below. If the context does not contain the answer, reply exactly: "{fail}"
+ANSWER_PROMPT = """Answer the question using the context below. Synthesize and combine information from multiple parts of the context where relevant, and incorporate general knowledge if it helps the response. Do not state specific facts, names, or figures that aren't supported by the context. If the context contains no information related to the question at all, reply exactly: "{fail}"
 
 CONTEXT:
 {context}
@@ -245,7 +245,7 @@ class HierarchicalRAGBackend(RAGBackend):
                                mode="collapsed-tree", ok=False)
 
         passages.sort(key=lambda x: -x[0])
-        context = "\n\n".join(p for _, p in passages[:k])[:8000]
+        context = "\n\n".join(p for _, p in passages[:k])[:24000]
         answer = await self._llm(
             ANSWER_PROMPT.format(context=context, question=text, fail=FAIL),
             hashing_kv=cache)
