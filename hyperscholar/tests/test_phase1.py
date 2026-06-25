@@ -219,10 +219,32 @@ def make_hyperrag(light=False):
                cosine_threshold=-1.0)   # hash embedder: accept all, rank by sim
 
 
+def make_pure_cograg():
+    from hyperscholar.rag.pure_cograg_backend import PureCogRAGBackend
+    stub_responses = {
+        "Extract all fine-grained entities": '[{"name": "chlorophyll", "description": "green pigment"}]',
+        "Extract high-order relations": '[{"entities": ["chlorophyll"], "description": "absorbs light"}]',
+    }
+    return PureCogRAGBackend(
+        llm_func=StubLLM(responses=stub_responses), embedder=HashEmbedder(dim=128),
+        working_dir="/tmp/hs_test", kv_cls=MemoryKVStorage,
+        vector_cls=MemoryVectorStorage, cosine_threshold=-1.0)
+
+def make_cograg_flash():
+    from hyperscholar.rag.cograg_flash_backend import CogRagFlashBackend
+    return CogRagFlashBackend(
+        llm_func=StubLLM(), embedder=HashEmbedder(dim=128),
+        working_dir="/tmp/hs_test", kv_cls=MemoryKVStorage,
+        vector_cls=MemoryVectorStorage, cluster_threshold=0.05,
+        cosine_threshold=-1.0)
+
+
 BACKEND_FACTORIES = {
     "hierarchical": make_hierarchical,
     "hyperrag": lambda: make_hyperrag(False),
     "hyperrag_light": lambda: make_hyperrag(True),
+    "pure_cograg": make_pure_cograg,
+    "cograg_flash": make_cograg_flash,
 }
 
 

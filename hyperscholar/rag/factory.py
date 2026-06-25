@@ -15,12 +15,16 @@ from ..core.embedder import build_embedder
 from .base import RAGBackend
 from .hierarchical_backend import HierarchicalRAGBackend
 from .hyperrag_backend import HyperRAGBackend, HyperRAGLightBackend
+from .pure_cograg_backend import PureCogRAGBackend
+from .cograg_flash_backend import CogRagFlashBackend
 from .router import RAGRouter
 
 BACKENDS = {
     "hyperrag": HyperRAGBackend,
     "hyperrag_light": HyperRAGLightBackend,
     "hierarchical": HierarchicalRAGBackend,
+    "pure_cograg": PureCogRAGBackend,
+    "cograg_flash": CogRagFlashBackend,
 }
 
 
@@ -53,6 +57,26 @@ def build_backend(cfg: Config | None = None, *, llm_func=None,
             llm_func=llm_func, embedder=embedder,
             working_dir=cfg.working_dir,
             kv_cls=kv_cls, vector_cls=vector_cls, hypergraph_cls=hg_cls,
+            pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
+    elif name == "pure_cograg":
+        return BACKENDS[name](
+            llm_func=llm_func, embedder=embedder,
+            working_dir=cfg.working_dir,
+            kv_cls=kv_cls, vector_cls=vector_cls,
+            pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
+    elif name == "cograg_flash":
+        from ..core.llm import build_llm_func
+        llm_fast_func = build_llm_func(cfg.llm_fast) if hasattr(cfg, "llm_fast") and cfg.llm_fast else llm_func
+        return BACKENDS[name](
+            llm_func=llm_func, llm_fast_func=llm_fast_func, embedder=embedder,
+            working_dir=cfg.working_dir,
+            kv_cls=kv_cls, vector_cls=vector_cls,
+            pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
+    elif name == "hierarchical":
+        return BACKENDS[name](
+            llm_func=llm_func, embedder=embedder,
+            working_dir=cfg.working_dir,
+            kv_cls=kv_cls, vector_cls=vector_cls,
             pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
 
 

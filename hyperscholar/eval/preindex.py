@@ -41,6 +41,8 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
     from hyperscholar.ingestion import load_corpus, corpus_summary
     from hyperscholar.rag.hyperrag_backend import HyperRAGBackend
     from hyperscholar.rag.hierarchical_backend import HierarchicalRAGBackend
+    from hyperscholar.rag.pure_cograg_backend import PureCogRAGBackend
+    from hyperscholar.rag.cograg_flash_backend import CogRagFlashBackend
     from hyperrag.storage import JsonKVStorage, NanoVectorDBStorage, HypergraphStorage
 
     cfg = load_config()
@@ -64,7 +66,7 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
           f"entity_extract_max_gleaning={cfg.hyperrag.entity_extract_max_gleaning}")
 
     backends = []
-    if backend in ("hyperrag", "both"):
+    if backend in ("hyperrag", "both", "all"):
         backends.append(("hyperrag", HyperRAGBackend(
             llm_func=llm, embedder=embedder, working_dir=cfg.working_dir,
             kv_cls=JsonKVStorage,
@@ -72,9 +74,24 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
             hypergraph_cls=HypergraphStorage,
             pg_dsn=None, fail_markers=cfg.rag.fail_markers,
             hyperrag_kwargs=hyperrag_kwargs)))
-    if backend in ("hierarchical", "both"):
+    if backend in ("hierarchical", "both", "all"):
         backends.append(("hierarchical", HierarchicalRAGBackend(
             llm_func=llm, embedder=embedder,
+            working_dir=cfg.working_dir,
+            kv_cls=JsonKVStorage,
+            vector_cls=NanoVectorDBStorage,
+            pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
+    if backend in ("pure_cograg", "all"):
+        backends.append(("pure_cograg", PureCogRAGBackend(
+            llm_func=llm, embedder=embedder,
+            working_dir=cfg.working_dir,
+            kv_cls=JsonKVStorage,
+            vector_cls=NanoVectorDBStorage,
+            pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
+    if backend in ("cograg_flash", "all"):
+        llm_fast_func = build_llm_func(cfg.llm_fast) if cfg.llm_fast else llm
+        backends.append(("cograg_flash", CogRagFlashBackend(
+            llm_func=llm, llm_fast_func=llm_fast_func, embedder=embedder,
             working_dir=cfg.working_dir,
             kv_cls=JsonKVStorage,
             vector_cls=NanoVectorDBStorage,
@@ -83,8 +100,8 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
     n_batches = (len(docs) + batch_size - 1) // batch_size
 
     for name, b in backends:
-        print(f"\n[index] {name} → namespace '{namespace}' "
-              f"({len(docs)} docs in {n_batches} batches of {batch_size})…")
+        print(f"\n[index] {name} -> namespace '{namespace}' "
+              f"({len(docs)} docs in {n_batches} batches of {batch_size})...")
         t0 = time.time()
         total_chunks = 0
         failed_batches = []
@@ -112,7 +129,7 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
 
         dt = time.time() - t0
         status = "done" if not failed_batches else f"done WITH {len(failed_batches)} FAILED BATCHES {failed_batches}"
-        print(f"[index] {name} {status} — {dt:.1f}s total")
+        print(f"[index] {name} {status} - {dt:.1f}s total")
         if failed_batches:
             print(f"[index] {name}: re-run the same command to retry. "
                   f"Already-indexed docs are skipped via content-hash dedup, "
@@ -125,8 +142,8 @@ def main():
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--namespace", default=None)
     ap.add_argument("--file", required=True)
-    ap.add_argument("--backend", default="both",
-                    choices=["hyperrag", "hierarchical", "both"])
+    ap.add_argument("--backend", default="all",
+                    choices=["hyperrag", "hierarchical", "pure_cograg", "cograg_flash", "both", "all"])
     ap.add_argument("--batch-size", type=int, default=200,
                     help="documents per index() call — bounds blast radius of "
                          "a single LLM failure during entity extraction")

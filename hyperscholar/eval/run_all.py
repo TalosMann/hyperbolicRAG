@@ -58,7 +58,7 @@ async def run_all(corpus: str, namespace: str, n: int, domain: str, top_k: int,
     from hyperscholar.eval.report import build_report
 
     print("=" * 60)
-    print(f"EVAL PIPELINE — {corpus} (namespace={namespace})")
+    print(f"EVAL PIPELINE - {corpus} (namespace={namespace})")
     print("=" * 60)
 
     print("\n[1/5] Exporting corpus structures…")
@@ -86,7 +86,7 @@ async def run_all(corpus: str, namespace: str, n: int, domain: str, top_k: int,
     print("\n[5/5] Building report…")
     build_report(RESULTS, [corpus])
 
-    print("\n✓ pipeline complete. See:")
+    print("\n* pipeline complete. See:")
     print(f"   {RESULTS / corpus / 'eval_results.json'}")
     print(f"   {RESULTS / 'eval_report.md'}")
 

@@ -96,6 +96,7 @@ class Config:
     rag: RAGConfig = field(default_factory=RAGConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    llm_fast: LLMConfig | None = None
     store: StoreConfig = field(default_factory=StoreConfig)
     hyperrag: HyperRAGConfig = field(default_factory=HyperRAGConfig)
     working_dir: str = "./hyperscholar_runtime"
@@ -115,6 +116,17 @@ def load_config(path: str | Path | None = None) -> Config:
                            and k != "providers"})
     llm_cfg.providers = providers
 
+    raw_llm_fast = raw.get("llm_fast", {})
+    if raw_llm_fast:
+        providers_raw_fast = raw_llm_fast.pop("providers", [])
+        providers_fast = [LLMProviderConfig(**p) for p in providers_raw_fast]
+        llm_fast_cfg = LLMConfig(**{k: v for k, v in raw_llm_fast.items()
+                               if k in LLMConfig.__dataclass_fields__
+                               and k != "providers"})
+        llm_fast_cfg.providers = providers_fast
+    else:
+        llm_fast_cfg = None
+
     _raw_wd = raw.get("working_dir", "./hyperscholar_runtime")
     _abs_wd = str((Path(__file__).resolve().parent.parent / _raw_wd.lstrip("./")).resolve())
 
@@ -122,6 +134,7 @@ def load_config(path: str | Path | None = None) -> Config:
         rag=RAGConfig(**raw.get("rag", {})),
         embedding=EmbeddingConfig(**raw.get("embedding", {})),
         llm=llm_cfg,
+        llm_fast=llm_fast_cfg,
         store=StoreConfig(**raw.get("store", {})),
         hyperrag=HyperRAGConfig(**raw.get("hyperrag", {})),
         working_dir=_abs_wd,

@@ -29,9 +29,13 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
     from hyperscholar.core.llm import build_llm_func
     from hyperscholar.rag.hyperrag_backend import HyperRAGBackend
     from hyperscholar.rag.hierarchical_backend import HierarchicalRAGBackend
+    from hyperscholar.rag.pure_cograg_backend import PureCogRAGBackend
+    from hyperscholar.rag.cograg_flash_backend import CogRagFlashBackend
     from hyperscholar.eval.provenance import (
         hyperrag_query_with_provenance,
         hierarchical_query_with_provenance,
+        pure_cograg_query_with_provenance,
+        cograg_flash_query_with_provenance,
     )
     from hyperrag.storage import JsonKVStorage, NanoVectorDBStorage, HypergraphStorage
 
@@ -48,6 +52,21 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
 
     hier = HierarchicalRAGBackend(
         llm_func=llm, embedder=embedder,
+        working_dir=cfg.working_dir,
+        kv_cls=JsonKVStorage,
+        vector_cls=NanoVectorDBStorage,
+        pg_dsn=None, fail_markers=cfg.rag.fail_markers)
+
+    pure = PureCogRAGBackend(
+        llm_func=llm, embedder=embedder,
+        working_dir=cfg.working_dir,
+        kv_cls=JsonKVStorage,
+        vector_cls=NanoVectorDBStorage,
+        pg_dsn=None, fail_markers=cfg.rag.fail_markers)
+
+    llm_fast_func = build_llm_func(cfg.llm_fast) if cfg.llm_fast else llm
+    flash = CogRagFlashBackend(
+        llm_func=llm, llm_fast_func=llm_fast_func, embedder=embedder,
         working_dir=cfg.working_dir,
         kv_cls=JsonKVStorage,
         vector_cls=NanoVectorDBStorage,
@@ -98,12 +117,36 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
                         "provenance": {"nodes_accessed": [], "chunks_accessed": [],
                                        "levels_accessed": [], "error": str(e)}}
 
+        try:
+            pure_res = await pure_cograg_query_with_provenance(
+                pure, namespace, text, top_k=top_k)
+        except Exception as e:
+            print(f"    pure_cograg ERROR: {e}")
+            pure_res = {"answer": "", "ok": False,
+                        "provenance": {"theme_edges": [], "theme_nodes": [],
+                                       "entity_nodes": [], "entity_edges": [], "error": str(e)}}
+
+        try:
+            flash_res = await cograg_flash_query_with_provenance(
+                flash, namespace, text, top_k=top_k)
+        except Exception as e:
+            print(f"    cograg_flash ERROR: {e}")
+            flash_res = {"answer": "", "ok": False,
+                         "provenance": {"theme_summaries": [], "targeting_keywords": "",
+                                        "chunks_accessed": [], "error": str(e)}}
+
         print(f"    hyperrag     ok={hyper_res['ok']} "
               f"ents={hyper_res['provenance'].get('counts', {}).get('entities', 0)} "
               f"edges={hyper_res['provenance'].get('counts', {}).get('hyperedges', 0)}")
         print(f"    hierarchical ok={hier_res['ok']} "
               f"nodes={hier_res['provenance'].get('counts', {}).get('tree_nodes', 0)} "
               f"levels={hier_res['provenance'].get('levels_accessed', [])}")
+        print(f"    pure_cograg  ok={pure_res['ok']} "
+              f"theme_edges={pure_res['provenance'].get('counts', {}).get('theme_edges', 0)} "
+              f"ent_nodes={pure_res['provenance'].get('counts', {}).get('entity_nodes', 0)}")
+        print(f"    cograg_flash ok={flash_res['ok']} "
+              f"themes={flash_res['provenance'].get('counts', {}).get('themes', 0)} "
+              f"chunks={flash_res['provenance'].get('counts', {}).get('chunks', 0)}")
 
         # Carry through every source_* field generically (source_chunk_id,
         # source_hyperedge_id, source_entities, source_topic, source_degree,
@@ -119,6 +162,8 @@ async def run_corpus(corpus: str, namespace: str, results_dir: Path,
             **source_fields,
             "hyperrag": hyper_res,
             "hierarchical": hier_res,
+            "pure_cograg": pure_res,
+            "cograg_flash": flash_res,
         })
 
         # Checkpoint — write after every question

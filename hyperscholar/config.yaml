@@ -1,7 +1,7 @@
 # HyperScholar — Phase 1 configuration
 # Switch the active RAG backend with ONE line:
 rag:
-  backend: hyperrag            # hyperrag | hyperrag_light | hierarchical
+  backend: hyperrag            # hyperrag | hyperrag_light | hierarchical | pure_cograg | cograg_flash
   top_k: 60
   min_sources: 1
 
@@ -46,6 +46,18 @@ llm:
       base_url: http://localhost:1234/v1
       model: local-model        # LM Studio uses whatever model is loaded
       api_key_env: ""
+
+# Fast LLM for CogRagFlash targeting
+llm_fast:
+  providers:
+    - name: deepseek
+      base_url: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY
+    - name: gemini
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+      model: gemini-2.0-flash
+      api_key_env: GEMINI_API_KEY
 
 store:
   # memory://  → in-process (dev/tests, no Postgres needed)
