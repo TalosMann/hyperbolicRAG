@@ -17,6 +17,7 @@ from .hierarchical_backend import HierarchicalRAGBackend
 from .hyperrag_backend import HyperRAGBackend, HyperRAGLightBackend
 from .pure_cograg_backend import PureCogRAGBackend
 from .cograg_flash_backend import CogRagFlashBackend
+from .cograg_official_backend import CogRAGOfficialBackend
 from .router import RAGRouter
 
 BACKENDS = {
@@ -25,10 +26,15 @@ BACKENDS = {
     "hierarchical": HierarchicalRAGBackend,
     "pure_cograg": PureCogRAGBackend,
     "cograg_flash": CogRagFlashBackend,
+    "cograg_official": CogRAGOfficialBackend,
 }
 
 
-def _storage_classes(cfg: Config):
+def storage_classes(cfg: Config):
+    """(kv_cls, vector_cls, hypergraph_cls, pg_dsn) for whichever store the
+    config points at. Shared by build_backend and the eval/ scripts so every
+    entrypoint agrees on where data lives — memory:// or Postgres, never a
+    mix within one pipeline run."""
     if cfg.store.dsn.startswith("memory://"):
         from ..storage.memory import (
             MemoryHypergraphStorage, MemoryKVStorage, MemoryVectorStorage,
@@ -46,7 +52,7 @@ def build_backend(cfg: Config | None = None, *, llm_func=None,
         raise ValueError(f"Unknown rag.backend '{name}'. "
                          f"Options: {', '.join(BACKENDS)}")
 
-    kv_cls, vector_cls, hg_cls, pg_dsn = _storage_classes(cfg)
+    kv_cls, vector_cls, hg_cls, pg_dsn = storage_classes(cfg)
     embedder = embedder or build_embedder(cfg.embedding)
     if llm_func is None:
         from ..core.llm import build_llm_func
@@ -78,6 +84,11 @@ def build_backend(cfg: Config | None = None, *, llm_func=None,
             working_dir=cfg.working_dir,
             kv_cls=kv_cls, vector_cls=vector_cls,
             pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
+    elif name == "cograg_official":
+        return BACKENDS[name](
+            llm_func=llm_func, embedder=embedder,
+            working_dir=cfg.working_dir,
+            fail_markers=cfg.rag.fail_markers)
 
 
 def build_router(cfg: Config | None = None, *, llm_func=None,

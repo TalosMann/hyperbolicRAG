@@ -15,6 +15,7 @@ backends.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -22,6 +23,30 @@ import os
 
 def _args_hash(*args) -> str:
     return hashlib.md5(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()
+
+
+async def _create_with_retry(client, max_attempts: int = 30, base_delay: float = 2.0,
+                             max_delay: float = 60.0, **kwargs):
+    """Retry the chat completion on connectivity blips / rate limits / 5xx.
+
+    Long indexing runs (hours of sequential LLM calls) shouldn't die on a
+    transient network drop; 30 attempts capped at 60s between tries gives
+    ~25 minutes of resilience before surfacing a real, persistent failure.
+    """
+    import openai
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except (openai.APIConnectionError, openai.APITimeoutError, openai.APIStatusError) as e:
+            if isinstance(e, openai.APIStatusError) and e.status_code not in (429, 500, 502, 503, 504):
+                raise
+            if attempt == max_attempts:
+                raise
+            delay = min(base_delay * 2 ** (attempt - 1), max_delay)
+            print(f"[LLM] {type(e).__name__} (attempt {attempt}/{max_attempts}) "
+                  f"— retrying in {delay:.0f}s")
+            await asyncio.sleep(delay)
 
 
 def make_deepseek_complete(cfg):
@@ -47,7 +72,7 @@ def make_deepseek_complete(cfg):
             if cached is not None:
                 return cached["return"]
 
-        resp = await client.chat.completions.create(model=model, messages=messages, **kwargs)
+        resp = await _create_with_retry(client, model=model, messages=messages, **kwargs)
         text = resp.choices[0].message.content
 
         if hashing_kv is not None:
@@ -77,7 +102,7 @@ def _make_provider_complete(provider):
             cached = await hashing_kv.get_by_id(h)
             if cached is not None:
                 return cached["return"]
-        resp = await client.chat.completions.create(model=model, messages=messages, **kwargs)
+        resp = await _create_with_retry(client, model=model, messages=messages, **kwargs)
         text = resp.choices[0].message.content
         if hashing_kv is not None:
             await hashing_kv.upsert({h: {"return": text, "model": model}})

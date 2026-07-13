@@ -3,8 +3,8 @@ r"""eval/corpus_export.py
 Dumps the FULL structural overlay of an indexed corpus to JSON + Markdown.
 Run once after preindex.py has completed.
 
-Uses file-backed storage (JsonKVStorage, NanoVectorDBStorage, HypergraphStorage)
-to read from the same persisted files that preindex.py wrote.
+Uses `rag.factory.storage_classes` to read from whichever store preindex.py
+wrote to (memory:// or Postgres) — same config, same data.
 
 Usage
 -----
@@ -26,18 +26,19 @@ async def export_hyperrag(corpus: str, namespace: str, results_dir: Path) -> Non
     from hyperscholar.core.embedder import build_embedder
     from hyperscholar.core.llm import build_llm_func
     from hyperscholar.rag.hyperrag_backend import HyperRAGBackend
-    from hyperrag.storage import JsonKVStorage, NanoVectorDBStorage, HypergraphStorage
+    from hyperscholar.rag.factory import storage_classes
 
     cfg = load_config()
+    kv_cls, vector_cls, hypergraph_cls, pg_dsn = storage_classes(cfg)
     embedder = build_embedder(cfg.embedding)
     llm = build_llm_func(cfg.llm)
 
     backend = HyperRAGBackend(
         llm_func=llm, embedder=embedder, working_dir=cfg.working_dir,
-        kv_cls=JsonKVStorage,
-        vector_cls=NanoVectorDBStorage,
-        hypergraph_cls=HypergraphStorage,
-        pg_dsn=None, fail_markers=cfg.rag.fail_markers)
+        kv_cls=kv_cls,
+        vector_cls=vector_cls,
+        hypergraph_cls=hypergraph_cls,
+        pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
 
     rag = backend._rag(namespace)
     hg = rag.chunk_entity_relation_hypergraph
@@ -105,18 +106,19 @@ async def export_hierarchical(corpus: str, namespace: str, results_dir: Path) ->
     from hyperscholar.core.embedder import build_embedder
     from hyperscholar.core.llm import build_llm_func
     from hyperscholar.rag.hierarchical_backend import HierarchicalRAGBackend
-    from hyperrag.storage import JsonKVStorage, NanoVectorDBStorage
+    from hyperscholar.rag.factory import storage_classes
 
     cfg = load_config()
+    kv_cls, vector_cls, _hg_cls, pg_dsn = storage_classes(cfg)
     embedder = build_embedder(cfg.embedding)
     llm = build_llm_func(cfg.llm)
 
     backend = HierarchicalRAGBackend(
         llm_func=llm, embedder=embedder,
         working_dir=cfg.working_dir,
-        kv_cls=JsonKVStorage,
-        vector_cls=NanoVectorDBStorage,
-        pg_dsn=None, fail_markers=cfg.rag.fail_markers)
+        kv_cls=kv_cls,
+        vector_cls=vector_cls,
+        pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
 
     docs, chunks, cache, chunks_vdb, tree_vdb, tree_kv = backend._stores(namespace)
 

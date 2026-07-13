@@ -116,14 +116,25 @@ Output ONLY the question, nothing else. Do not explain what's missing."""
 
 # ── per-style generators (each returns a list of dicts, no "id" yet) ─────────
 
+def _chunks_store(cfg, namespace: str):
+    """The `hyperrag` backend's text_chunks store — fact/negative styles
+    sample from it regardless of which backend(s) are under evaluation,
+    since preindex.py always indexes hyperrag alongside the rest."""
+    from hyperscholar.rag.factory import storage_classes
+
+    kv_cls, _vector_cls, _hg_cls, pg_dsn = storage_classes(cfg)
+    addon = {"tenant": namespace}
+    if pg_dsn:
+        addon["pg_dsn"] = pg_dsn
+    gcfg = {"working_dir": os.path.join(cfg.working_dir, "hyperrag", namespace),
+            "addon_params": addon, "embedding_batch_num": 8}
+    return kv_cls(namespace="text_chunks", global_config=gcfg)
+
+
 async def _generate_fact(llm, domain: str, n: int, seed: int,
                          results_dir: Path, corpus: str, namespace: str,
-                         working_dir: str) -> list[dict]:
-    from hyperrag.storage import JsonKVStorage
-
-    workdir = os.path.join(working_dir, "hyperrag", namespace)
-    gcfg = {"working_dir": workdir, "addon_params": {}, "embedding_batch_num": 8}
-    chunks = JsonKVStorage(namespace="text_chunks", global_config=gcfg)
+                         cfg) -> list[dict]:
+    chunks = _chunks_store(cfg, namespace)
     chunk_ids = await chunks.all_keys()
     if not chunk_ids:
         raise RuntimeError(
@@ -240,12 +251,8 @@ def _generate_overview(domain: str, n: int, seed: int) -> list[dict]:
 
 
 async def _generate_negative(llm, domain: str, n: int, seed: int,
-                             namespace: str, working_dir: str) -> list[dict]:
-    from hyperrag.storage import JsonKVStorage
-
-    workdir = os.path.join(working_dir, "hyperrag", namespace)
-    gcfg = {"working_dir": workdir, "addon_params": {}, "embedding_batch_num": 8}
-    chunks = JsonKVStorage(namespace="text_chunks", global_config=gcfg)
+                             namespace: str, cfg) -> list[dict]:
+    chunks = _chunks_store(cfg, namespace)
     chunk_ids = await chunks.all_keys()
     if not chunk_ids:
         raise RuntimeError(
@@ -323,7 +330,7 @@ async def generate_questions(corpus: str, n: int, namespace: str,
 
     if style == "fact":
         new_items = await _generate_fact(llm, domain, n, seed, results_dir,
-                                         corpus, namespace, cfg.working_dir)
+                                         corpus, namespace, cfg)
     elif style == "relational":
         new_items = await _generate_relational(llm, domain, n, seed,
                                                results_dir, corpus)
@@ -334,7 +341,7 @@ async def generate_questions(corpus: str, n: int, namespace: str,
         new_items = _generate_overview(domain, n, seed)
     elif style == "negative":
         new_items = await _generate_negative(llm, domain, n, seed,
-                                             namespace, cfg.working_dir)
+                                             namespace, cfg)
     else:
         raise ValueError(f"Unknown style: {style!r}")
 

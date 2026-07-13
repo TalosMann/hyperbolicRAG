@@ -1,8 +1,10 @@
 r"""eval/preindex.py
 
 Headless corpus indexing — no GUI. Indexes into both backends under a named
-namespace using file-backed storage (JsonKVStorage, NanoVectorDBStorage,
-HypergraphStorage) so data persists between processes.
+namespace, using whichever store `config.yaml`'s `store.dsn` (or
+`HYPERSCHOLAR_DSN`) points at — memory:// or Postgres — via
+`rag.factory.storage_classes`, so this and runner.py / corpus_export.py /
+question_generator.py always agree on where the data lives.
 
 BATCHED INDEXING (important): HyperRAG's entity extraction runs one
 asyncio.gather() per ainsert() call across ALL chunks in that call. If any
@@ -41,12 +43,13 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
     from hyperscholar.ingestion import load_corpus, corpus_summary
     from hyperscholar.rag.hyperrag_backend import HyperRAGBackend
     from hyperscholar.rag.hierarchical_backend import HierarchicalRAGBackend
-    from hyperscholar.rag.pure_cograg_backend import PureCogRAGBackend
-    from hyperscholar.rag.cograg_flash_backend import CogRagFlashBackend
-    from hyperrag.storage import JsonKVStorage, NanoVectorDBStorage, HypergraphStorage
+    from hyperscholar.rag.cograg_official_backend import CogRAGOfficialBackend
+    from hyperscholar.rag.factory import storage_classes
 
     cfg = load_config()
+    kv_cls, vector_cls, hypergraph_cls, pg_dsn = storage_classes(cfg)
     print(f"[config] working_dir: {cfg.working_dir}")
+    print(f"[config] store: {'Postgres (' + pg_dsn.split('@')[-1] + ')' if pg_dsn else 'memory:// (no persistence across restarts)'}")
     print(f"[config] embedding device: {cfg.embedding.device}  model: {cfg.embedding.model}")
     print(f"[config] llm providers: {[p.name for p in cfg.llm.providers]}")
 
@@ -69,33 +72,23 @@ async def preindex(corpus: str, namespace: str, file: str, backend: str,
     if backend in ("hyperrag", "both", "all"):
         backends.append(("hyperrag", HyperRAGBackend(
             llm_func=llm, embedder=embedder, working_dir=cfg.working_dir,
-            kv_cls=JsonKVStorage,
-            vector_cls=NanoVectorDBStorage,
-            hypergraph_cls=HypergraphStorage,
-            pg_dsn=None, fail_markers=cfg.rag.fail_markers,
+            kv_cls=kv_cls,
+            vector_cls=vector_cls,
+            hypergraph_cls=hypergraph_cls,
+            pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers,
             hyperrag_kwargs=hyperrag_kwargs)))
     if backend in ("hierarchical", "both", "all"):
         backends.append(("hierarchical", HierarchicalRAGBackend(
             llm_func=llm, embedder=embedder,
             working_dir=cfg.working_dir,
-            kv_cls=JsonKVStorage,
-            vector_cls=NanoVectorDBStorage,
-            pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
-    if backend in ("pure_cograg", "all"):
-        backends.append(("pure_cograg", PureCogRAGBackend(
+            kv_cls=kv_cls,
+            vector_cls=vector_cls,
+            pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)))
+    if backend in ("cograg_official", "all"):
+        backends.append(("cograg_official", CogRAGOfficialBackend(
             llm_func=llm, embedder=embedder,
             working_dir=cfg.working_dir,
-            kv_cls=JsonKVStorage,
-            vector_cls=NanoVectorDBStorage,
-            pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
-    if backend in ("cograg_flash", "all"):
-        llm_fast_func = build_llm_func(cfg.llm_fast) if cfg.llm_fast else llm
-        backends.append(("cograg_flash", CogRagFlashBackend(
-            llm_func=llm, llm_fast_func=llm_fast_func, embedder=embedder,
-            working_dir=cfg.working_dir,
-            kv_cls=JsonKVStorage,
-            vector_cls=NanoVectorDBStorage,
-            pg_dsn=None, fail_markers=cfg.rag.fail_markers)))
+            fail_markers=cfg.rag.fail_markers)))
 
     n_batches = (len(docs) + batch_size - 1) // batch_size
 
@@ -143,7 +136,7 @@ def main():
     ap.add_argument("--namespace", default=None)
     ap.add_argument("--file", required=True)
     ap.add_argument("--backend", default="all",
-                    choices=["hyperrag", "hierarchical", "pure_cograg", "cograg_flash", "both", "all"])
+                    choices=["hyperrag", "hierarchical", "cograg_official", "both", "all"])
     ap.add_argument("--batch-size", type=int, default=200,
                     help="documents per index() call — bounds blast radius of "
                          "a single LLM failure during entity extraction")

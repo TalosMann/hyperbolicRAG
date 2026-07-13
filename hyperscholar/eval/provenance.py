@@ -298,6 +298,31 @@ async def pure_cograg_query_with_provenance(backend, namespace: str, text: str,
     }
 
 
+# ── CogRAG Official ──────────────────────────────────────────────────────────
+
+async def cograg_official_query_with_provenance(backend, namespace: str, text: str,
+                                                top_k: int = 60) -> dict:
+    """Query CogRAGOfficialBackend and return the standard provenance shape."""
+    qr = await backend.query(namespace, text, top_k=top_k)
+    sources = [
+        {
+            "chunk_id": s.chunk_id,
+            "doc_id": s.doc_id,
+            "score": s.score,
+            "excerpt": s.excerpt,
+        }
+        for s in (qr.sources or [])
+    ]
+    return {
+        "answer": qr.answer,
+        "ok": qr.ok,
+        "provenance": {
+            "sources": sources,
+            "counts": {"sources": len(sources)},
+        },
+    }
+
+
 # ── CogRagFlash ──────────────────────────────────────────────────────────────
 
 async def cograg_flash_query_with_provenance(backend, namespace: str, text: str,

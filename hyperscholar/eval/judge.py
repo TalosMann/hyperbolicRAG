@@ -1,7 +1,10 @@
 r"""eval/judge.py
 
 LLM-as-judge on the five iMoonLab paper metrics, blind and position-randomized
-— for fact / relational / synthesis / overview style questions.
+— for fact / relational / synthesis / overview style questions. Scores all
+four backends (hyperrag, hierarchical, pure_cograg, cograg_flash) together in
+a single judge call per question, labeled A-D in randomized order so the
+judge can't infer identity from position.
 
 NEGATIVE-style questions are scored differently: no LLM comparison, just a
 refusal check against each backend's own fail_markers. A "refused" answer is
@@ -29,11 +32,13 @@ import asyncio
 import json
 import random
 import re
+import string
 from pathlib import Path
 
+BACKENDS = ["hyperrag", "hierarchical", "cograg_official"]
 METRICS = ["comprehensiveness", "diversity", "empowerment", "logical", "readability"]
 
-JUDGE_PROMPT = """You are an impartial expert evaluator comparing two answers to the same question. Score each answer from 1 (poor) to 10 (excellent) on five dimensions:
+JUDGE_PROMPT_HEADER = """You are an impartial expert evaluator comparing {n} answers to the same question. Score EACH answer from 1 (poor) to 10 (excellent) on five dimensions:
 
 - Comprehensiveness: covers all relevant aspects of the question
 - Diversity: presents varied, rich perspectives and detail
@@ -43,21 +48,29 @@ JUDGE_PROMPT = """You are an impartial expert evaluator comparing two answers to
 
 QUESTION:
 {question}
+"""
 
-ANSWER A:
-{answer_a}
-
-ANSWER B:
-{answer_b}
-
+JUDGE_PROMPT_FOOTER = """
 Respond with ONLY a JSON object in exactly this form, no other text:
 {{
-  "A": {{"comprehensiveness": int, "diversity": int, "empowerment": int, "logical": int, "readability": int}},
-  "B": {{"comprehensiveness": int, "diversity": int, "empowerment": int, "logical": int, "readability": int}}
+{fields}
 }}"""
 
 
-def _parse_scores(raw: str) -> dict | None:
+def _build_judge_prompt(question: str, labeled_answers: list[tuple[str, str]]) -> str:
+    """labeled_answers: [(label, answer_text), ...] in the order to present them."""
+    parts = [JUDGE_PROMPT_HEADER.format(n=len(labeled_answers), question=question)]
+    for label, answer in labeled_answers:
+        parts.append(f"\nANSWER {label}:\n{answer}\n")
+    fields = ",\n".join(
+        f'  "{label}": {{"comprehensiveness": int, "diversity": int, '
+        f'"empowerment": int, "logical": int, "readability": int}}'
+        for label, _ in labeled_answers)
+    parts.append(JUDGE_PROMPT_FOOTER.format(fields=fields))
+    return "".join(parts)
+
+
+def _parse_scores(raw: str, labels: list[str]) -> dict | None:
     if not raw:
         return None
     cleaned = raw.replace("```json", "").replace("```", "").strip()
@@ -68,11 +81,11 @@ def _parse_scores(raw: str) -> dict | None:
         obj = json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
-    if "A" not in obj or "B" not in obj:
-        return None
-    for side in ("A", "B"):
+    for label in labels:
+        if label not in obj:
+            return None
         for metric in METRICS:
-            if metric not in obj[side]:
+            if metric not in obj[label]:
                 return None
     return obj
 
@@ -83,20 +96,24 @@ def _mean(scores: dict) -> float:
 
 def _compute_aggregate(judged: list) -> dict:
     """Aggregate over scored (non-negative-style) questions only."""
-    agg = {b: {m: 0.0 for m in METRICS} for b in ("hyperrag", "hierarchical")}
-    wins = {"hyperrag": 0, "hierarchical": 0, "tie": 0}
+    agg = {b: {m: 0.0 for m in METRICS} for b in BACKENDS}
+    wins = {b: 0 for b in BACKENDS}
+    wins["tie"] = 0
     n_scored = 0
     for item in judged:
         s = item.get("scores")
         if not s:
             continue
         n_scored += 1
-        for b in ("hyperrag", "hierarchical"):
+        for b in BACKENDS:
+            bs = s.get(b)
+            if not bs:
+                continue
             for m in METRICS:
-                agg[b][m] += s[b].get(m, 0)
-        wins[s.get("winner", "tie")] += 1
+                agg[b][m] += bs.get(m, 0)
+        wins[s.get("winner", "tie")] = wins.get(s.get("winner", "tie"), 0) + 1
     aggregate = {}
-    for b in ("hyperrag", "hierarchical"):
+    for b in BACKENDS:
         per_metric = {m: round(agg[b][m] / n_scored, 2) if n_scored else 0.0
                       for m in METRICS}
         per_metric["mean"] = round(sum(per_metric.values()) / len(METRICS), 2)
@@ -111,13 +128,12 @@ def _compute_negative_summary(judged: list) -> dict | None:
              and j.get("negative_check") is not None]
     if not items:
         return None
-    out = {"n": len(items), "hyperrag_refused": 0, "hierarchical_refused": 0}
+    out = {"n": len(items), **{f"{b}_refused": 0 for b in BACKENDS}}
     for j in items:
         nc = j["negative_check"]
-        if nc.get("hyperrag_refused"):
-            out["hyperrag_refused"] += 1
-        if nc.get("hierarchical_refused"):
-            out["hierarchical_refused"] += 1
+        for b in BACKENDS:
+            if nc.get(f"{b}_refused"):
+                out[f"{b}_refused"] += 1
     return out
 
 
@@ -149,6 +165,7 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
 
     judged_by_id = {item["id"]: item for item in judged}
     rng = random.Random(seed)
+    letters = list(string.ascii_uppercase[:len(BACKENDS)])
 
     for item in data["results"]:
         qid = item["id"]
@@ -159,30 +176,24 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
 
         # ── negative style: refusal check, no LLM comparison ─────────────────
         if style == "negative":
-            nc = {
-                "hyperrag_refused": not item["hyperrag"]["ok"],
-                "hierarchical_refused": not item["hierarchical"]["ok"],
-            }
-            print(f"  Q{qid} [negative]: hyperrag_refused={nc['hyperrag_refused']} "
-                  f"hierarchical_refused={nc['hierarchical_refused']}")
+            nc = {f"{b}_refused": not item.get(b, {}).get("ok", True) for b in BACKENDS}
+            print(f"  Q{qid} [negative]: " +
+                  " ".join(f"{b}={nc[f'{b}_refused']}" for b in BACKENDS))
             judged_by_id[qid] = {**item, "scores": None, "negative_check": nc}
             judged = list(judged_by_id.values())
             _save(out_path, corpus, data, judged)
             continue
 
         # ── all other styles: blind, position-randomized LLM judge ──────────
-        hyper_ans = item["hyperrag"]["answer"]
-        hier_ans = item["hierarchical"]["answer"]
-
-        flip = rng.random() < 0.5
-        a_ans, b_ans = (hier_ans, hyper_ans) if flip else (hyper_ans, hier_ans)
-        a_backend, b_backend = (
-            ("hierarchical", "hyperrag") if flip else ("hyperrag", "hierarchical"))
+        answers = {b: item.get(b, {}).get("answer", "") for b in BACKENDS}
+        order = list(BACKENDS)
+        rng.shuffle(order)
+        label_to_backend = dict(zip(letters, order))
+        labeled_answers = [(label, answers[b]) for label, b in label_to_backend.items()]
 
         try:
-            reply = await llm(JUDGE_PROMPT.format(
-                question=item["question"], answer_a=a_ans, answer_b=b_ans))
-            parsed = _parse_scores(reply)
+            reply = await llm(_build_judge_prompt(item["question"], labeled_answers))
+            parsed = _parse_scores(reply, letters)
         except Exception as e:
             print(f"  Q{qid} [{style}]: judge error ({e}), skipping")
             judged_by_id[qid] = {**item, "scores": None}
@@ -194,18 +205,17 @@ async def judge_corpus(corpus: str, results_dir: Path, seed: int = 7) -> Path:
             print(f"  Q{qid} [{style}]: judge parse failed, skipping")
             judged_by_id[qid] = {**item, "scores": None}
         else:
-            scores = {a_backend: parsed["A"], b_backend: parsed["B"]}
-            hyper_mean = _mean(scores["hyperrag"])
-            hier_mean = _mean(scores["hierarchical"])
-            winner = ("hyperrag" if hyper_mean > hier_mean
-                      else "hierarchical" if hier_mean > hyper_mean else "tie")
-            print(f"  Q{qid} [{style}]: hyperrag={hyper_mean} "
-                  f"hierarchical={hier_mean} → {winner}")
+            scores = {label_to_backend[label]: parsed[label] for label in letters}
+            means = {b: _mean(scores[b]) for b in BACKENDS}
+            top = max(means.values())
+            winners = [b for b in BACKENDS if means[b] == top]
+            winner = winners[0] if len(winners) == 1 else "tie"
+            print(f"  Q{qid} [{style}]: " +
+                  " ".join(f"{b}={means[b]}" for b in BACKENDS) + f" → {winner}")
             judged_by_id[qid] = {
                 **item,
                 "scores": {
-                    "hyperrag": {**scores["hyperrag"], "mean": hyper_mean},
-                    "hierarchical": {**scores["hierarchical"], "mean": hier_mean},
+                    **{b: {**scores[b], "mean": means[b]} for b in BACKENDS},
                     "winner": winner,
                 },
             }

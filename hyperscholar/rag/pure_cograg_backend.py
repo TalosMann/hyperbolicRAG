@@ -109,97 +109,17 @@ class PureCogRAGBackend(RAGBackend):
         
         n_theme_edges = 0
         n_entity_nodes = 0
+        n_failed = 0
 
-        for chunk in chunks:
-            chunk_id = _hash_id(chunk, "chunk-")
-            
-            # 1. Extract theme
-            theme = await self._llm(P_EXT_THEME.format(chunk=chunk), hashing_kv=cache)
-            theme_edge_id = _hash_id(theme, "tedge-")
-            
-            # 2. Extract key entities for theme
-            key_ents_raw = await self._llm(P_EXT_KEY.format(theme=theme, chunk=chunk), hashing_kv=cache)
-            key_ents = [e.strip() for e in key_ents_raw.split(',') if e.strip()]
-            
-            # Store theme edge
-            await theme_edges_vdb.upsert({
-                theme_edge_id: {
-                    "content": theme,
-                    "incident_nodes": key_ents,
-                    "chunk_id": chunk_id
-                }
-            })
-            n_theme_edges += 1
-            
-            # Store key entities in KV
-            theme_nodes_payload = {}
-            for name in key_ents:
-                node_id = _hash_id(name, "tnode-")
-                theme_nodes_payload[node_id] = {
-                    "name": name,
-                    "incident_edge": theme_edge_id,
-                    "chunk_id": chunk_id
-                }
-            await theme_nodes_kv.upsert(theme_nodes_payload)
-
-            # 3. Extract entities
-            ents_raw = await self._llm(P_EXT_ENTITY.format(chunk=chunk), hashing_kv=cache)
+        for i, chunk in enumerate(chunks):
             try:
-                js_str = ents_raw.strip()
-                if js_str.startswith("```json"): js_str = js_str[7:]
-                if js_str.endswith("```"): js_str = js_str[:-3]
-                entities = json.loads(js_str.strip())
-            except Exception:
-                entities = []
-            
-            # 4. Extract relations
-            rels_raw = await self._llm(P_EXT_REL.format(chunk=chunk), hashing_kv=cache)
-            try:
-                js_str = rels_raw.strip()
-                if js_str.startswith("```json"): js_str = js_str[7:]
-                if js_str.endswith("```"): js_str = js_str[:-3]
-                relations = json.loads(js_str.strip())
-            except Exception:
-                relations = []
-
-            # Process relations
-            edge_payload = {}
-            ent_to_edges = {}
-            for rel in relations:
-                desc = rel.get("description", "")
-                ents = rel.get("entities", [])
-                if not desc or not ents:
-                    continue
-                edge_id = _hash_id(desc, "eedge-")
-                edge_payload[edge_id] = {
-                    "content": desc,
-                    "chunk_id": chunk_id,
-                    "entities": ents
-                }
-                for e in ents:
-                    ent_to_edges.setdefault(e, []).append(edge_id)
-            if edge_payload:
-                await entity_edges_kv.upsert(edge_payload)
-
-            # Store entity nodes
-            ent_nodes_payload = {}
-            for ent in entities:
-                name = ent.get("name", "")
-                desc = ent.get("description", "")
-                if not name or not desc:
-                    continue
-                node_id = _hash_id(name+desc, "enode-")
-                edges = ent_to_edges.get(name, [])
-                
-                ent_nodes_payload[node_id] = {
-                    "content": desc,
-                    "name": name,
-                    "chunk_id": chunk_id,
-                    "incident_edges": edges
-                }
-            if ent_nodes_payload:
-                await entity_nodes_vdb.upsert(ent_nodes_payload)
-                n_entity_nodes += len(ent_nodes_payload)
+                n_theme_edges, n_entity_nodes = await self._index_chunk(
+                    chunk, cache, theme_edges_vdb, theme_nodes_kv,
+                    entity_nodes_vdb, entity_edges_kv, n_theme_edges, n_entity_nodes)
+            except Exception as e:
+                n_failed += 1
+                print(f"[pure_cograg] chunk {i + 1}/{len(chunks)} failed permanently "
+                      f"({type(e).__name__}: {e}) — skipping")
 
         for store in (cache, theme_edges_vdb, theme_nodes_kv, entity_nodes_vdb, entity_edges_kv):
             cb = getattr(store, "index_done_callback", None)
@@ -208,8 +128,114 @@ class PureCogRAGBackend(RAGBackend):
 
         return IndexResult(
             namespace=namespace, documents=len(documents), chunks=len(chunks),
-            backend=self.name, detail={"theme_edges": n_theme_edges, "entity_nodes": n_entity_nodes}
+            backend=self.name, detail={"theme_edges": n_theme_edges,
+                                       "entity_nodes": n_entity_nodes,
+                                       "failed_chunks": n_failed}
         )
+
+    async def _index_chunk(self, chunk, cache, theme_edges_vdb, theme_nodes_kv,
+                           entity_nodes_vdb, entity_edges_kv, n_theme_edges, n_entity_nodes):
+        chunk_id = _hash_id(chunk, "chunk-")
+
+        # 1. Extract theme
+        theme = await self._llm(P_EXT_THEME.format(chunk=chunk), hashing_kv=cache)
+        theme_edge_id = _hash_id(theme, "tedge-")
+
+        # 2. Extract key entities for theme
+        key_ents_raw = await self._llm(P_EXT_KEY.format(theme=theme, chunk=chunk), hashing_kv=cache)
+        key_ents = [e.strip() for e in key_ents_raw.split(',') if e.strip()]
+
+        # Store theme edge
+        await theme_edges_vdb.upsert({
+            theme_edge_id: {
+                "content": theme,
+                "incident_nodes": key_ents,
+                "chunk_id": chunk_id
+            }
+        })
+        n_theme_edges += 1
+
+        # Store key entities in KV
+        theme_nodes_payload = {}
+        for name in key_ents:
+            node_id = _hash_id(name, "tnode-")
+            theme_nodes_payload[node_id] = {
+                "name": name,
+                "incident_edge": theme_edge_id,
+                "chunk_id": chunk_id
+            }
+        await theme_nodes_kv.upsert(theme_nodes_payload)
+
+        # 3. Extract entities
+        ents_raw = await self._llm(P_EXT_ENTITY.format(chunk=chunk), hashing_kv=cache)
+        try:
+            js_str = ents_raw.strip()
+            if js_str.startswith("```json"): js_str = js_str[7:]
+            if js_str.endswith("```"): js_str = js_str[:-3]
+            entities = json.loads(js_str.strip())
+            if not isinstance(entities, list):
+                entities = []
+        except Exception:
+            entities = []
+
+        # 4. Extract relations
+        rels_raw = await self._llm(P_EXT_REL.format(chunk=chunk), hashing_kv=cache)
+        try:
+            js_str = rels_raw.strip()
+            if js_str.startswith("```json"): js_str = js_str[7:]
+            if js_str.endswith("```"): js_str = js_str[:-3]
+            relations = json.loads(js_str.strip())
+            if not isinstance(relations, list):
+                relations = []
+        except Exception:
+            relations = []
+
+        # Process relations — the LLM's JSON sometimes contains malformed
+        # entries (e.g. a bare string instead of an object); skip those
+        # rather than letting one bad entry fail the whole chunk.
+        edge_payload = {}
+        ent_to_edges = {}
+        for rel in relations:
+            if not isinstance(rel, dict):
+                continue
+            desc = rel.get("description", "")
+            ents = rel.get("entities", [])
+            if not desc or not ents:
+                continue
+            edge_id = _hash_id(desc, "eedge-")
+            edge_payload[edge_id] = {
+                "content": desc,
+                "chunk_id": chunk_id,
+                "entities": ents
+            }
+            for e in ents:
+                ent_to_edges.setdefault(e, []).append(edge_id)
+        if edge_payload:
+            await entity_edges_kv.upsert(edge_payload)
+
+        # Store entity nodes
+        ent_nodes_payload = {}
+        for ent in entities:
+            if not isinstance(ent, dict):
+                continue
+            name = ent.get("name", "")
+            desc = ent.get("description", "")
+            if not name or not desc:
+                continue
+            node_id = _hash_id(name+desc, "enode-")
+            edges = ent_to_edges.get(name, [])
+
+            ent_nodes_payload[node_id] = {
+                "content": desc,
+                "name": name,
+                "chunk_id": chunk_id,
+                "incident_edges": edges
+            }
+        if ent_nodes_payload:
+            await entity_nodes_vdb.upsert(ent_nodes_payload)
+            n_entity_nodes += len(ent_nodes_payload)
+
+        return n_theme_edges, n_entity_nodes
 
     async def query(self, namespace: TenantNS, text: str, top_k: int = 60) -> QueryResult:
         cache, theme_edges_vdb, theme_nodes_kv, entity_nodes_vdb, entity_edges_kv = self._stores(namespace)

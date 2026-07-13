@@ -1,5 +1,6 @@
 # Virtual environments
 venv/
+.venv/
 .env/
 __pycache__/
 *.pyc
@@ -29,6 +30,7 @@ logs/
 #evaluation outputs
 hyperscholar/eval/results/
 demo_small.jsonl
+hyperscholar/agriculture.jsonl
 hyperscholar/hyperscholar_runtime/
 HyperRAG_vs_HierarchicalRAG_Evaluation_Report.docx
 backup/

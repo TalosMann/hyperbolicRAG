@@ -1,4 +1,5 @@
 pyyaml
+python-dotenv
 numpy
 openai            # OpenAI-compatible client for DeepSeek / SiliconFlow
 sentence-transformers   # local bge-m3 (MPS)

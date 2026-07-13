@@ -1,6 +1,7 @@
 r"""eval/report.py
 
-Reads <corpus>/eval_results.json and renders a Markdown comparison report:
+Reads <corpus>/eval_results.json and renders a Markdown comparison report
+across all four backends (hyperrag, hierarchical, pure_cograg, cograg_flash):
   - overall scores (all non-negative-style questions combined)
   - PER-STYLE breakdown (fact / relational / synthesis / overview) — this is
     the table that actually means something, since a single aggregate number
@@ -20,6 +21,12 @@ import argparse
 import json
 from pathlib import Path
 
+BACKENDS = ["hyperrag", "hierarchical", "cograg_official"]
+BACKEND_LABELS = {
+    "hyperrag": "HyperRAG",
+    "hierarchical": "HierarchicalRAG",
+    "cograg_official": "CogRAG",
+}
 METRICS = ["comprehensiveness", "diversity", "empowerment", "logical", "readability"]
 STYLE_ORDER = ["fact", "relational", "synthesis", "overview"]
 STYLE_LABELS = {
@@ -45,20 +52,24 @@ def _load_results(results_dir: Path, corpora: list[str] | None) -> dict:
 
 def _aggregate_for(questions: list) -> dict:
     """Compute wins/means over whatever scored questions are passed in."""
-    agg = {b: {m: 0.0 for m in METRICS} for b in ("hyperrag", "hierarchical")}
-    wins = {"hyperrag": 0, "hierarchical": 0, "tie": 0}
+    agg = {b: {m: 0.0 for m in METRICS} for b in BACKENDS}
+    wins = {b: 0 for b in BACKENDS}
+    wins["tie"] = 0
     n = 0
     for item in questions:
         s = item.get("scores")
         if not s:
             continue
         n += 1
-        for b in ("hyperrag", "hierarchical"):
+        for b in BACKENDS:
+            bs = s.get(b)
+            if not bs:
+                continue
             for m in METRICS:
-                agg[b][m] += s[b].get(m, 0)
-        wins[s.get("winner", "tie")] += 1
+                agg[b][m] += bs.get(m, 0)
+        wins[s.get("winner", "tie")] = wins.get(s.get("winner", "tie"), 0) + 1
     out = {}
-    for b in ("hyperrag", "hierarchical"):
+    for b in BACKENDS:
         pm = {m: round(agg[b][m] / n, 2) if n else 0.0 for m in METRICS}
         pm["mean"] = round(sum(pm.values()) / len(METRICS), 2)
         out[b] = pm
@@ -68,29 +79,33 @@ def _aggregate_for(questions: list) -> dict:
 
 
 def _metric_table(agg: dict) -> list[str]:
-    rows = ["| Metric | HyperRAG | HierarchicalRAG | Δ |",
-            "|--------|---------:|----------------:|---:|"]
+    header = "| Metric | " + " | ".join(BACKEND_LABELS[b] for b in BACKENDS) + " |"
+    sep = "|--------|" + "|".join("---:" for _ in BACKENDS) + "|"
+    rows = [header, sep]
     for m in METRICS + ["mean"]:
-        h = agg["hyperrag"].get(m, 0)
-        r = agg["hierarchical"].get(m, 0)
-        delta = round(h - r, 2)
-        sign = "+" if delta > 0 else ""
         label = m.capitalize() if m != "mean" else "**Mean**"
-        rows.append(f"| {label} | {h} | {r} | {sign}{delta} |")
+        vals = " | ".join(str(agg[b].get(m, 0)) for b in BACKENDS)
+        rows.append(f"| {label} | {vals} |")
     return rows
 
 
 def _negative_table(neg: dict) -> list[str]:
     n = neg["n"]
-    hr = neg["hyperrag_refused"]
-    hir = neg["hierarchical_refused"]
     rows = [
         "| | Correctly declined | Did not decline |",
         "|---|---:|---:|",
-        f"| HyperRAG | {hr}/{n} ({100*hr/n:.0f}%) | {n-hr}/{n} |",
-        f"| HierarchicalRAG | {hir}/{n} ({100*hir/n:.0f}%) | {n-hir}/{n} |",
     ]
+    for b in BACKENDS:
+        refused = neg.get(f"{b}_refused", 0)
+        rows.append(f"| {BACKEND_LABELS[b]} | {refused}/{n} "
+                    f"({100*refused/n:.0f}%) | {n-refused}/{n} |")
     return rows
+
+
+def _wins_line(wins: dict) -> str:
+    parts = [f"{BACKEND_LABELS[b]} {wins.get(b, 0)}" for b in BACKENDS]
+    parts.append(f"tie {wins.get('tie', 0)}")
+    return " · ".join(parts)
 
 
 def build_report(results_dir: Path, corpora: list[str] | None) -> Path:
@@ -98,18 +113,19 @@ def build_report(results_dir: Path, corpora: list[str] | None) -> Path:
     if not data:
         raise RuntimeError(f"No eval_results.json found under {results_dir}")
 
-    md = ["# HyperRAG vs HierarchicalRAG — evaluation report\n",
+    md = ["# RAG backend comparison — evaluation report\n",
           "Scoring follows the iMoonLab Hyper-RAG protocol: an LLM judge rates "
-          "each answer 1–10 on five dimensions, blind and position-randomized. "
-          "Higher is better; Δ is HyperRAG minus HierarchicalRAG.\n",
+          "each answer 1–10 on five dimensions, blind and position-randomized, "
+          "across all four backends in a single judge call per question. "
+          "Higher is better.\n",
           "Questions span multiple **styles** targeting different retrieval "
           "capabilities — see the per-style breakdown below before drawing "
           "conclusions from the overall number alone, since a single aggregate "
           "is dominated by whichever style has the most questions.\n"]
 
-    overall_running = {b: {m: 0.0 for m in METRICS + ["mean"]}
-                       for b in ("hyperrag", "hierarchical")}
-    overall_wins = {"hyperrag": 0, "hierarchical": 0, "tie": 0}
+    overall_running = {b: {m: 0.0 for m in METRICS + ["mean"]} for b in BACKENDS}
+    overall_wins = {b: 0 for b in BACKENDS}
+    overall_wins["tie"] = 0
     n_corpora = 0
 
     for corpus, d in data.items():
@@ -123,9 +139,7 @@ def build_report(results_dir: Path, corpora: list[str] | None) -> Path:
                   f"non-negative questions scored: {n_scored}\n")
         md.append("### Overall (all styles combined)\n")
         md.extend(_metric_table(agg))
-        md.append(f"\n**Wins:** HyperRAG {wins.get('hyperrag', 0)} · "
-                  f"HierarchicalRAG {wins.get('hierarchical', 0)} · "
-                  f"tie {wins.get('tie', 0)}\n")
+        md.append(f"\n**Wins:** {_wins_line(wins)}\n")
 
         # ── per-style breakdown ──────────────────────────────────────────────
         by_style: dict = {}
@@ -144,9 +158,7 @@ def build_report(results_dir: Path, corpora: list[str] | None) -> Path:
                 md.append(f"\n**{STYLE_LABELS.get(s, s)}** "
                           f"({s_agg['n_scored']} questions)\n")
                 md.extend(_metric_table(s_agg))
-                w = s_agg["wins"]
-                md.append(f"\nWins: HyperRAG {w['hyperrag']} · "
-                          f"HierarchicalRAG {w['hierarchical']} · tie {w['tie']}\n")
+                md.append(f"\nWins: {_wins_line(s_agg['wins'])}\n")
 
         # ── negative / hallucination-resistance ──────────────────────────────
         neg = d.get("negative_summary")
@@ -164,22 +176,20 @@ def build_report(results_dir: Path, corpora: list[str] | None) -> Path:
 
         # accumulate for cross-corpus summary (overall metrics only)
         n_corpora += 1
-        for b in ("hyperrag", "hierarchical"):
+        for b in BACKENDS:
             for m in METRICS + ["mean"]:
                 overall_running[b][m] += agg[b].get(m, 0)
         for k in overall_wins:
             overall_wins[k] += wins.get(k, 0)
 
     if n_corpora > 1:
-        for b in ("hyperrag", "hierarchical"):
+        for b in BACKENDS:
             for m in METRICS + ["mean"]:
                 overall_running[b][m] = round(overall_running[b][m] / n_corpora, 2)
         md.append("\n## Cross-corpus summary (overall, all styles)\n")
         md.append(f"Averaged across {n_corpora} corpora.\n")
         md.extend(_metric_table(overall_running))
-        md.append(f"\n**Total wins:** HyperRAG {overall_wins['hyperrag']} · "
-                  f"HierarchicalRAG {overall_wins['hierarchical']} · "
-                  f"tie {overall_wins['tie']}\n")
+        md.append(f"\n**Total wins:** {_wins_line(overall_wins)}\n")
 
     out_path = results_dir / "eval_report.md"
     out_path.write_text("\n".join(md), encoding="utf-8")
