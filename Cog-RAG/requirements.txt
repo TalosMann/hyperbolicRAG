@@ -1,0 +1,20 @@
+# Cog-RAG Dependencies
+# Core async and HTTP
+aiohttp
+aioboto3
+
+# LLM Integration  
+openai
+tenacity
+tiktoken
+
+# Vector Storage
+nano-vectordb
+numpy
+
+# Hypergraph Storage
+hypergraph-db
+
+# Utilities
+xxhash
+pydantic
