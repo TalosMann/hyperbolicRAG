@@ -106,12 +106,23 @@ Below is a real passage from a {domain} corpus:
 PASSAGE:
 {passage}
 
-Write ONE question that:
+First, carefully read the ENTIRE passage above — every sentence, including the middle and end, not just the opening — and mentally note every specific fact, number, name, date, or detail it actually states.
+
+Then write ONE question that:
 - sounds plausible and closely related to the passage's topic
-- asks for a SPECIFIC fact, number, name, date, or detail that is plausible-sounding but is NOT actually stated anywhere in this passage — invent a specific but absent detail to ask about (an exact statistic, a specific date, a named study, a specific dosage, etc.)
+- asks for a SPECIFIC fact, number, name, date, or detail that is plausible-sounding but is NOT actually stated anywhere in the passage — invent a specific but absent detail to ask about (an exact statistic, a specific date, a named study, a specific dosage, etc.)
+- must NOT be answerable from any sentence in the passage — re-check the full passage before finalizing to make sure you have not accidentally asked about something it already states
 - is a single sentence
 
 Output ONLY the question, nothing else. Do not explain what's missing."""
+
+NEGATIVE_VERIFY_PROMPT = """PASSAGE:
+{passage}
+
+QUESTION:
+{question}
+
+Does the passage above explicitly state the answer to this question? Reply with exactly one word: YES or NO."""
 
 
 # ── per-style generators (each returns a list of dicts, no "id" yet) ─────────
@@ -251,7 +262,12 @@ def _generate_overview(domain: str, n: int, seed: int) -> list[dict]:
 
 
 async def _generate_negative(llm, domain: str, n: int, seed: int,
-                             namespace: str, cfg) -> list[dict]:
+                             namespace: str, cfg, max_attempts: int = 3) -> list[dict]:
+    """Drafts a candidate 'plausible but absent' question per chunk, then
+    verifies with a second LLM call that the passage genuinely does not
+    answer it — retrying (new candidate, same passage) on a YES before
+    falling back to the next chunk. Oversamples chunks 3x since some will
+    be exhausted by rejections before producing an accepted question."""
     chunks = _chunks_store(cfg, namespace)
     chunk_ids = await chunks.all_keys()
     if not chunk_ids:
@@ -259,26 +275,46 @@ async def _generate_negative(llm, domain: str, n: int, seed: int,
             f"No indexed chunks for namespace '{namespace}'. Index the corpus first.")
 
     rng = random.Random(seed + 4)
-    sample_ids = rng.sample(chunk_ids, min(n, len(chunk_ids)))
+    sample_ids = rng.sample(chunk_ids, min(n * 3, len(chunk_ids)))
     rows = await chunks.get_by_ids(sample_ids)
 
     out = []
     for cid, row in zip(sample_ids, rows):
+        if len(out) >= n:
+            break
         content = (row or {}).get("content", "")
         if not content.strip():
             continue
-        q = await llm(NEGATIVE_PROMPT.format(domain=domain, passage=content[:2000]))
-        q = (q or "").strip().strip('"')
-        if q:
+        passage = content[:2000]
+
+        accepted = None
+        for attempt in range(max_attempts):
+            candidate = await llm(NEGATIVE_PROMPT.format(domain=domain, passage=passage))
+            candidate = (candidate or "").strip().strip('"')
+            if not candidate:
+                continue
+            verify = await llm(NEGATIVE_VERIFY_PROMPT.format(
+                passage=passage, question=candidate))
+            passage_answers_it = (verify or "").strip().upper().startswith("Y")
+            if not passage_answers_it:
+                accepted = candidate
+                break
+            print(f"  [negative] rejected attempt {attempt+1} (passage answers "
+                  f"it): {candidate[:80]}")
+
+        if accepted:
             out.append({
                 "style": "negative",
-                "question": q,
+                "question": accepted,
                 "source_chunk_id": cid,
                 "source_excerpt": content[:500],
                 "note": "Asked detail is intentionally absent from the source "
                         "passage — correct behavior is to decline, not fabricate.",
             })
-        print(f"  [negative {len(out)}/{n}] {q[:80]}")
+            print(f"  [negative {len(out)}/{n}] {accepted[:80]}")
+        else:
+            print(f"  [negative] gave up on chunk {cid} after {max_attempts} "
+                  f"attempts, trying next chunk")
     return out
 
 

@@ -20,6 +20,16 @@ hyperrag:
 llm:
   providers:
 
+    - name: zhipu
+      base_url: https://open.bigmodel.cn/api/paas/v4/
+      model: glm-4-flash          # Zhipu free tier (paid GLM models need balance)
+      api_key_env: ZHIPU_API_KEY
+
+    - name: anthropic
+      base_url: https://api.anthropic.com/v1/
+      model: claude-sonnet-4-5     # out of credit as of this session; re-fund to reactivate
+      api_key_env: ANTHROPIC_API_KEY
+
     - name: deepseek
       base_url: https://api.deepseek.com/v1
       model: deepseek-chat

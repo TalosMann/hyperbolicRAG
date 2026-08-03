@@ -1,0 +1,61 @@
+==========================================================================================
+Q: How is Fan related to Tiny Tim?  [multihop_unstated]  decision=SERVE
+VERIFIED:
+   Fan -- is the sister of -- Scrooge  prov=['chunk-9e3921da66da5d761ab73cd849af6c43', 'chunk-c6c248858d1b13ab7ee9ca13c1aeed6b', 'rel-314']
+   Fred -- is the nephew of -- Scrooge  prov=['chunk-9e3921da66da5d761ab73cd849af6c43', 'chunk-89777b838d5447c7bd1ec11282c4ee89', 'chunk-773d0df1dd25c356f7b771d780583e09']
+   Bob Cratchit -- is the father of -- Tiny Tim  prov=['chunk-9e3921da66da5d761ab73cd849af6c43', 'chunk-7e2e7ebcc19a53b399dc03aded4743e7', 'chunk-503f0bfa5453467c7c61d160a3540eca']
+REJECTED:
+   [R2] Fan -- had as child -- Fred  | co-mentioning evidence does not state this relation
+   [R2] Scrooge -- becomes a second father to -- Tiny Tim  | co-mentioning evidence does not state this relation
+ANSWER:
+Based only on the source material:
+- Fan — is the sister of — Scrooge  [chunk-9e3921da66da5d761ab73cd849af6c43, chunk-c6c248858d1b13ab7ee9ca13c1aeed6b]
+- Fred — is the nephew of — Scrooge  [chunk-9e3921da66da5d761ab73cd849af6c43, chunk-89777b838d5447c7bd1ec11282c4ee89]
+- Bob Cratchit — is the father of — Tiny Tim  [chunk-9e3921da66da5d761ab73cd849af6c43, chunk-7e2e7ebcc19a53b399dc03aded4743e7]
+- Fan is Scrooge's sister.
+- Fan had one child, who is Scrooge's nephew Fred.
+
+Note: the source does not state a direct relationship between FAN and TINY TIM. Any connection runs indirectly through: Bob Cratchit, Fred, Scrooge.
+
+==========================================================================================
+Q: What specific year was the Project Gutenberg trademark first officially registered?  [control_decline]  decision=SERVE
+VERIFIED:
+REJECTED:
+ANSWER:
+Based only on the source material:
+- Project Gutenberg is a registered trademark
+- "Project Gutenberg" is a registered trademark
+
+==========================================================================================
+ALL SERVED RELATIONS THIS RUN (audit list):
+   Tiny Tim | is the child of | Bob Cratchit
+   Bob Cratchit | is employed by | Scrooge
+   Fezziwig | was the employer of | Scrooge
+   Fan | is the sister of | Scrooge
+   Fred | is the nephew of | Scrooge
+   Scrooge | is the employer of | Bob Cratchit
+   JACOB MARLEY | forged in life | CHAIN
+   JACOB MARLEY | was business partner of | SCROOGE
+   SCROOGE | is uncle of | NEPHEW
+   SCROOGE | employs | CLERK
+   CLERK | is identified as | BOB CRATCHIT
+   Belle | was an old sweetheart of | Scrooge
+   Belle | mentions as an old friend | Scrooge
+   Belle | is wife of | Master of the House
+   Scrooge | is employer of | Bob Cratchit
+   Bob Cratchit | is the father of | Tiny Tim
+   Fan | is the sister of | Scrooge
+   Fred | is the nephew of | Scrooge
+   Bob Cratchit | is the father of | Tiny Tim
+   ALI BABA | is remembered by | SCROOGE
+   FEZZIWIG'S BALL | is observed as past memory by | SCROOGE
+   SCROOGE | has nephew | SCROOGE'S NEPHEW
+   SCROOGE'S NIECE | played music at party that stirred memories from | GHOST OF CHRISTMAS PAST
+   ROBIN CRUSOE | is a character from the books read by | SCROOGE (as a boy)
+   SCROOGE (as a boy) | imagined/played with characters including | ROBIN CRUSOE
+   SCROOGE | is connected to the Cratchit family through | BOB CRATCHIT
+   BOB CRATCHIT | is married to | MRS. CRATCHIT
+   THE GHOST | said to | SCROOGE
+   SCROOGE | is employer of | BOB CRATCHIT
+   BOB CRATCHIT | is father of | MARTHA
+   DYING FLAME | fell again after | MARLEY'S GHOST

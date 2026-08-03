@@ -27,7 +27,17 @@ BACKENDS = {
     "pure_cograg": PureCogRAGBackend,
     "cograg_flash": CogRagFlashBackend,
     "cograg_official": CogRAGOfficialBackend,
+    "cograg_safe": None,   # resolved lazily — cograg_safe.backend imports rag.base,
+                           # so a top-level import here would be circular
 }
+
+
+def _backend_cls(name: str):
+    cls = BACKENDS[name]
+    if cls is None and name == "cograg_safe":
+        from ..cograg_safe.backend import CogRAGSafeBackend
+        BACKENDS[name] = cls = CogRAGSafeBackend
+    return cls
 
 
 def storage_classes(cfg: Config):
@@ -84,8 +94,8 @@ def build_backend(cfg: Config | None = None, *, llm_func=None,
             working_dir=cfg.working_dir,
             kv_cls=kv_cls, vector_cls=vector_cls,
             pg_dsn=pg_dsn, fail_markers=cfg.rag.fail_markers)
-    elif name == "cograg_official":
-        return BACKENDS[name](
+    elif name in ("cograg_official", "cograg_safe"):
+        return _backend_cls(name)(
             llm_func=llm_func, embedder=embedder,
             working_dir=cfg.working_dir,
             fail_markers=cfg.rag.fail_markers)
